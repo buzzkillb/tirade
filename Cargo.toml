@@ -1,5 +1,6 @@
 [workspace]
 members = [
     "solana-trading-bot",
-    "price-feed"
-, "database-service"]
+    "price-feed",
+    "database-service",
+    "trading-logic"]
