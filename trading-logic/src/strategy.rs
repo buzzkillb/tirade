@@ -1,11 +1,21 @@
 use crate::models::{TradingSignal, SignalType, TradingIndicators, PriceFeed};
 use crate::config::Config;
 use chrono::{DateTime, Utc};
-use tracing::{info, warn, debug};
+use tracing::info;
 
 pub struct TradingStrategy {
     config: Config,
     last_signal: Option<TradingSignal>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DynamicThresholds {
+    pub rsi_oversold: f64,
+    pub rsi_overbought: f64,
+    pub take_profit: f64,
+    pub stop_loss: f64,
+    pub momentum_threshold: f64,
+    pub volatility_multiplier: f64,
 }
 
 impl TradingStrategy {
@@ -23,16 +33,80 @@ impl TradingStrategy {
         // Calculate our custom indicators
         let custom_indicators = self.calculate_custom_indicators(prices);
         
-        // Generate trading signal
+        // Calculate dynamic thresholds based on market conditions
+        let dynamic_thresholds = self.calculate_dynamic_thresholds(prices, &custom_indicators);
+        
+        // Generate trading signal with dynamic thresholds
         let signal = self.generate_signal(
             current_price,
             timestamp,
             &custom_indicators,
             indicators,
+            &dynamic_thresholds,
         );
 
         self.last_signal = Some(signal.clone());
         signal
+    }
+
+    fn calculate_dynamic_thresholds(&self, _prices: &[PriceFeed], indicators: &TradingIndicators) -> DynamicThresholds {
+        let volatility = indicators.volatility.unwrap_or(0.02);
+        let _price_momentum = indicators.price_momentum.unwrap_or(0.0);
+        
+        // Base thresholds
+        let base_rsi_oversold = 30.0;
+        let base_rsi_overbought = 70.0;
+        let base_take_profit = 0.03; // 3%
+        let base_stop_loss = 0.02;   // 2%
+        let base_momentum_threshold = 0.005; // 0.5%
+        
+        // Adjust based on volatility
+        let volatility_multiplier = if volatility > 0.05 {
+            // High volatility - wider thresholds
+            1.5
+        } else if volatility < 0.01 {
+            // Low volatility - tighter thresholds
+            0.7
+        } else {
+            // Normal volatility
+            1.0
+        };
+        
+        // Adjust RSI thresholds based on volatility
+        let rsi_oversold = if volatility > 0.05 {
+            base_rsi_oversold + 5.0 // More sensitive in high volatility
+        } else if volatility < 0.01 {
+            base_rsi_oversold - 5.0 // Less sensitive in low volatility
+        } else {
+            base_rsi_oversold
+        };
+        
+        let rsi_overbought = if volatility > 0.05 {
+            base_rsi_overbought - 5.0 // More sensitive in high volatility
+        } else if volatility < 0.01 {
+            base_rsi_overbought + 5.0 // Less sensitive in low volatility
+        } else {
+            base_rsi_overbought
+        };
+        
+        // Adjust take profit and stop loss based on volatility
+        let take_profit = base_take_profit * volatility_multiplier;
+        let stop_loss = base_stop_loss * volatility_multiplier;
+        
+        // Adjust momentum threshold based on volatility
+        let momentum_threshold = base_momentum_threshold * volatility_multiplier;
+        
+        info!("📊 Dynamic Thresholds - Volatility: {:.3}%, RSI Oversold: {:.1}, RSI Overbought: {:.1}, Take Profit: {:.2}%, Stop Loss: {:.2}%", 
+              volatility * 100.0, rsi_oversold, rsi_overbought, take_profit * 100.0, stop_loss * 100.0);
+        
+        DynamicThresholds {
+            rsi_oversold,
+            rsi_overbought,
+            take_profit,
+            stop_loss,
+            momentum_threshold,
+            volatility_multiplier,
+        }
     }
 
     fn calculate_custom_indicators(&self, prices: &[PriceFeed]) -> TradingIndicators {
@@ -89,26 +163,29 @@ impl TradingStrategy {
         current_price: f64,
         timestamp: DateTime<Utc>,
         indicators: &TradingIndicators,
-        db_indicators: &crate::models::TechnicalIndicators,
+        _db_indicators: &crate::models::TechnicalIndicators,
+        dynamic_thresholds: &DynamicThresholds,
     ) -> TradingSignal {
         let mut confidence: f64 = 0.0;
         let mut reasoning = Vec::new();
         let mut signal_type = SignalType::Hold;
 
-        // Strategy 1: RSI Divergence Signal
+        // Strategy 1: RSI Divergence Signal (with dynamic thresholds)
         if let (Some(rsi_fast), Some(rsi_slow)) = (indicators.rsi_fast, indicators.rsi_slow) {
             // Buy signal: Fast RSI crosses above slow RSI from oversold
-            if rsi_fast > rsi_slow && rsi_fast < 40.0 && rsi_slow < 35.0 {
+            if rsi_fast > rsi_slow && rsi_fast < dynamic_thresholds.rsi_oversold + 10.0 && rsi_slow < dynamic_thresholds.rsi_oversold + 5.0 {
                 signal_type = SignalType::Buy;
                 confidence += 0.3;
-                reasoning.push(format!("RSI divergence: Fast RSI ({:.2}) > Slow RSI ({:.2}) from oversold", rsi_fast, rsi_slow));
+                reasoning.push(format!("RSI divergence: Fast RSI ({:.2}) > Slow RSI ({:.2}) from oversold (threshold: {:.1})", 
+                                     rsi_fast, rsi_slow, dynamic_thresholds.rsi_oversold));
             }
             
             // Sell signal: Fast RSI crosses below slow RSI from overbought
-            if rsi_fast < rsi_slow && rsi_fast > 60.0 && rsi_slow > 65.0 {
+            if rsi_fast < rsi_slow && rsi_fast > dynamic_thresholds.rsi_overbought - 10.0 && rsi_slow > dynamic_thresholds.rsi_overbought - 5.0 {
                 signal_type = SignalType::Sell;
                 confidence += 0.3;
-                reasoning.push(format!("RSI divergence: Fast RSI ({:.2}) < Slow RSI ({:.2}) from overbought", rsi_fast, rsi_slow));
+                reasoning.push(format!("RSI divergence: Fast RSI ({:.2}) < Slow RSI ({:.2}) from overbought (threshold: {:.1})", 
+                                     rsi_fast, rsi_slow, dynamic_thresholds.rsi_overbought));
             }
         }
 
@@ -139,54 +216,60 @@ impl TradingStrategy {
             }
         }
 
-        // Strategy 3: Volatility Breakout
+        // Strategy 3: Volatility Breakout (with dynamic thresholds)
         if let Some(volatility) = indicators.volatility {
             let avg_volatility = 0.02; // 2% average volatility
+            let volatility_threshold = avg_volatility * dynamic_thresholds.volatility_multiplier;
             
-            if volatility > avg_volatility * 1.5 {
+            if volatility > volatility_threshold {
                 // High volatility - look for momentum continuation
-                if indicators.price_momentum.unwrap_or(0.0) > self.config.price_change_threshold {
+                if indicators.price_momentum.unwrap_or(0.0) > dynamic_thresholds.momentum_threshold {
                     if signal_type == SignalType::Buy {
                         confidence += 0.15;
                     } else {
                         signal_type = SignalType::Buy;
                         confidence += 0.15;
                     }
-                    reasoning.push(format!("Volatility breakout: {:.3}% volatility with positive momentum", volatility * 100.0));
-                } else if indicators.price_momentum.unwrap_or(0.0) < -self.config.price_change_threshold {
+                    reasoning.push(format!("Volatility breakout: {:.3}% volatility (threshold: {:.3}%) with positive momentum", 
+                                         volatility * 100.0, volatility_threshold * 100.0));
+                } else if indicators.price_momentum.unwrap_or(0.0) < -dynamic_thresholds.momentum_threshold {
                     if signal_type == SignalType::Sell {
                         confidence += 0.15;
                     } else {
                         signal_type = SignalType::Sell;
                         confidence += 0.15;
                     }
-                    reasoning.push(format!("Volatility breakout: {:.3}% volatility with negative momentum", volatility * 100.0));
+                    reasoning.push(format!("Volatility breakout: {:.3}% volatility (threshold: {:.3}%) with negative momentum", 
+                                         volatility * 100.0, volatility_threshold * 100.0));
                 }
             }
         }
 
-        // Strategy 4: Mean Reversion (when RSI is extreme)
+        // Strategy 4: Mean Reversion (with dynamic thresholds)
         if let Some(rsi_fast) = indicators.rsi_fast {
-            if rsi_fast < 20.0 && signal_type == SignalType::Hold {
+            if rsi_fast < dynamic_thresholds.rsi_oversold - 10.0 && signal_type == SignalType::Hold {
                 signal_type = SignalType::Buy;
                 confidence += 0.25;
-                reasoning.push(format!("Mean reversion: Extreme oversold RSI ({:.2})", rsi_fast));
-            } else if rsi_fast > 80.0 && signal_type == SignalType::Hold {
+                reasoning.push(format!("Mean reversion: Extreme oversold RSI ({:.2}) < {:.1}", 
+                                     rsi_fast, dynamic_thresholds.rsi_oversold - 10.0));
+            } else if rsi_fast > dynamic_thresholds.rsi_overbought + 10.0 && signal_type == SignalType::Hold {
                 signal_type = SignalType::Sell;
                 confidence += 0.25;
-                reasoning.push(format!("Mean reversion: Extreme overbought RSI ({:.2})", rsi_fast));
+                reasoning.push(format!("Mean reversion: Extreme overbought RSI ({:.2}) > {:.1}", 
+                                     rsi_fast, dynamic_thresholds.rsi_overbought + 10.0));
             }
         }
 
-        // Strategy 5: Price Momentum Confirmation
-        let momentum_threshold = self.config.price_change_threshold;
-        if indicators.price_change_percent.abs() > momentum_threshold {
-            if indicators.price_change_percent > momentum_threshold && signal_type == SignalType::Buy {
+        // Strategy 5: Price Momentum Confirmation (with dynamic thresholds)
+        if indicators.price_change_percent.abs() > dynamic_thresholds.momentum_threshold {
+            if indicators.price_change_percent > dynamic_thresholds.momentum_threshold && signal_type == SignalType::Buy {
                 confidence += 0.1;
-                reasoning.push(format!("Momentum confirmation: {:.2}% price increase", indicators.price_change_percent * 100.0));
-            } else if indicators.price_change_percent < -momentum_threshold && signal_type == SignalType::Sell {
+                reasoning.push(format!("Momentum confirmation: {:.2}% price increase (threshold: {:.2}%)", 
+                                     indicators.price_change_percent * 100.0, dynamic_thresholds.momentum_threshold * 100.0));
+            } else if indicators.price_change_percent < -dynamic_thresholds.momentum_threshold && signal_type == SignalType::Sell {
                 confidence += 0.1;
-                reasoning.push(format!("Momentum confirmation: {:.2}% price decrease", indicators.price_change_percent * 100.0));
+                reasoning.push(format!("Momentum confirmation: {:.2}% price decrease (threshold: {:.2}%)", 
+                                     indicators.price_change_percent * 100.0, dynamic_thresholds.momentum_threshold * 100.0));
             }
         }
 
@@ -201,11 +284,12 @@ impl TradingStrategy {
 
         TradingSignal {
             signal_type,
-            confidence,
             price: current_price,
             timestamp,
-            reasoning: reasoning.join("; "),
-            indicators: indicators.clone(),
+            confidence,
+            reasoning,
+            take_profit: dynamic_thresholds.take_profit,
+            stop_loss: dynamic_thresholds.stop_loss,
         }
     }
 

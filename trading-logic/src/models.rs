@@ -37,8 +37,9 @@ pub struct TradingSignal {
     pub confidence: f64,
     pub price: f64,
     pub timestamp: DateTime<Utc>,
-    pub reasoning: String,
-    pub indicators: TradingIndicators,
+    pub reasoning: Vec<String>,
+    pub take_profit: f64,
+    pub stop_loss: f64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

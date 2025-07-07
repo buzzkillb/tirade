@@ -4,7 +4,7 @@ use crate::strategy::TradingStrategy;
 use anyhow::{Result, anyhow};
 use reqwest::Client;
 use std::time::Duration;
-use tokio::time::sleep;
+
 use tracing::{info, warn, error, debug};
 use chrono::Utc;
 
@@ -51,7 +51,7 @@ impl TradingEngine {
         info!("═══════════════════════════════════════════════════════════════");
         info!("  📊 Trading Pair: {}", self.config.trading_pair);
         info!("  🎯 Min Data Points: {}", self.config.min_data_points);
-        info!("  ⏱️  Check Interval: {} seconds", self.config.check_interval);
+        info!("  ⏱️  Check Interval: {} seconds", self.config.check_interval_secs);
         info!("  🛑 Stop Loss: {:.2}%", self.config.stop_loss_threshold * 100.0);
         info!("  💰 Take Profit: {:.2}%", self.config.take_profit_threshold * 100.0);
         info!("  🌐 Database URL: {}", self.config.database_url);
@@ -74,7 +74,7 @@ impl TradingEngine {
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(self.config.check_interval)).await;
+            tokio::time::sleep(Duration::from_secs(self.config.check_interval_secs)).await;
         }
     }
 
@@ -212,6 +212,8 @@ impl TradingEngine {
                     info!("  💰 Entry Price: ${:.4}", signal.price);
                     info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
                     info!("  📊 Position Type: Long");
+                    info!("  🎯 Dynamic Take Profit: {:.2}%", signal.take_profit * 100.0);
+                    info!("  🛑 Dynamic Stop Loss: {:.2}%", signal.stop_loss * 100.0);
                     info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
                     info!("═══════════════════════════════════════════════════════════════");
                     info!("");
@@ -221,9 +223,14 @@ impl TradingEngine {
             }
             SignalType::Sell => {
                 if let Some(position) = &self.current_position {
+                    // Extract position data before mutable borrow
+                    let entry_price = position.entry_price;
+                    let entry_time = position.entry_time;
+                    let position_type = position.position_type.clone();
+                    
                     // Close position
                     let pnl = self.calculate_pnl(signal.price, position);
-                    let duration = Utc::now() - position.entry_time;
+                    let duration = Utc::now() - entry_time;
                     self.close_position(signal.price).await?;
                     
                     let pnl_emoji = if pnl > 0.0 { "💰" } else if pnl < 0.0 { "💸" } else { "➡️" };
@@ -233,11 +240,11 @@ impl TradingEngine {
                     info!("🔴 SELL SIGNAL EXECUTED - {}", pnl_status);
                     info!("═══════════════════════════════════════════════════════════════");
                     info!("  💰 Exit Price: ${:.4}", signal.price);
-                    info!("  📈 Entry Price: ${:.4}", position.entry_price);
+                    info!("  📈 Entry Price: ${:.4}", entry_price);
                     info!("  {} PnL: {:.2}%", pnl_emoji, pnl * 100.0);
                     info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
                     info!("  ⏱️  Duration: {}s", duration.num_seconds());
-                    info!("  📊 Position Type: {:?}", position.position_type);
+                    info!("  📊 Position Type: {:?}", position_type);
                     info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
                     info!("═══════════════════════════════════════════════════════════════");
                     info!("");
@@ -246,39 +253,43 @@ impl TradingEngine {
                 }
             }
             SignalType::Hold => {
-                // Check for stop loss or take profit
+                // Check for stop loss or take profit using dynamic thresholds
                 if let Some(position) = &self.current_position {
                     let pnl = self.calculate_pnl(signal.price, position);
                     
-                    // Stop loss check
-                    if pnl < -self.config.stop_loss_threshold {
-                        let duration = Utc::now() - position.entry_time;
+                    // Stop loss check using dynamic threshold
+                    if pnl < -signal.stop_loss {
+                        let entry_price = position.entry_price;
+                        let entry_time = position.entry_time;
+                        let duration = Utc::now() - entry_time;
                         self.close_position(signal.price).await?;
                         
                         info!("");
-                        info!("🛑 STOP LOSS TRIGGERED");
+                        info!("🛑 DYNAMIC STOP LOSS TRIGGERED");
                         info!("═══════════════════════════════════════════════════════════════");
                         info!("  💰 Exit Price: ${:.4}", signal.price);
-                        info!("  📈 Entry Price: ${:.4}", position.entry_price);
+                        info!("  📈 Entry Price: ${:.4}", entry_price);
                         info!("  💸 Loss: {:.2}%", pnl * 100.0);
-                        info!("  🎯 Stop Loss Threshold: {:.2}%", self.config.stop_loss_threshold * 100.0);
+                        info!("  🎯 Dynamic Stop Loss Threshold: {:.2}%", signal.stop_loss * 100.0);
                         info!("  ⏱️  Duration: {}s", duration.num_seconds());
                         info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
                         info!("═══════════════════════════════════════════════════════════════");
                         info!("");
                     }
-                    // Take profit check
-                    else if pnl > self.config.take_profit_threshold {
-                        let duration = Utc::now() - position.entry_time;
+                    // Take profit check using dynamic threshold
+                    else if pnl > signal.take_profit {
+                        let entry_price = position.entry_price;
+                        let entry_time = position.entry_time;
+                        let duration = Utc::now() - entry_time;
                         self.close_position(signal.price).await?;
                         
                         info!("");
-                        info!("💰 TAKE PROFIT TRIGGERED");
+                        info!("💰 DYNAMIC TAKE PROFIT TRIGGERED");
                         info!("═══════════════════════════════════════════════════════════════");
                         info!("  💰 Exit Price: ${:.4}", signal.price);
-                        info!("  📈 Entry Price: ${:.4}", position.entry_price);
+                        info!("  📈 Entry Price: ${:.4}", entry_price);
                         info!("  💰 Profit: {:.2}%", pnl * 100.0);
-                        info!("  🎯 Take Profit Threshold: {:.2}%", self.config.take_profit_threshold * 100.0);
+                        info!("  🎯 Dynamic Take Profit Threshold: {:.2}%", signal.take_profit * 100.0);
                         info!("  ⏱️  Duration: {}s", duration.num_seconds());
                         info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
                         info!("═══════════════════════════════════════════════════════════════");
@@ -385,7 +396,13 @@ impl TradingEngine {
         // Signal reasoning
         info!("");
         info!("🧠 Signal Analysis:");
-        info!("  💭 Reasoning: {}", signal.reasoning);
+        if signal.reasoning.is_empty() {
+            info!("  💭 No specific reasoning available");
+        } else {
+            for (i, reason) in signal.reasoning.iter().enumerate() {
+                info!("  {}. {}", i + 1, reason);
+            }
+        }
         
         // Market sentiment based on indicators
         let mut bullish_signals = 0;

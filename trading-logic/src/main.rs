@@ -4,7 +4,7 @@ mod strategy;
 mod trading_engine;
 
 use anyhow::Result;
-use tracing::{info, warn, error};
+use tracing::info;
 use tracing_subscriber;
 
 use crate::config::Config;
