@@ -1,0 +1,35 @@
+# Rust build artifacts
+/target/
+**/target/
+
+# IDE/editor files
+.idea/
+.vscode/
+*.swp
+
+# Environment and secrets
+.env
+.env.*
+
+# Database and data
+/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+/logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node/npm (if any JS tooling is used)
+node_modules/
+
+# Ignore lock files if not needed
+# Cargo.lock
+
+# Ignore by example
+# Add more patterns as needed

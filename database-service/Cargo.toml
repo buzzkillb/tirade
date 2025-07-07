@@ -1,0 +1,19 @@
+[package]
+name = "database-service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sqlx = { version = "0.6", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "offline"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+anyhow = "1.0"
+dotenv = "0.15"
+tracing = "0.1"
+tracing-subscriber = "0.3"
