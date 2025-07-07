@@ -65,7 +65,7 @@ async fn main() -> Result<(), TransactionError> {
     
     // Execute the swap
     info!("Executing swap transaction...");
-    let tx_signature = execute_swap(&client, &wallet, &quote, &args, &config).await?;
+    let tx_signature = execute_swap(&client, &wallet, &quote, &args, &config, sol_balance, usdc_balance).await?;
     info!("Transaction successful! Signature: {}", tx_signature);
     
     // Wait for transaction confirmation and check new balances

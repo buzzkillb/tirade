@@ -2,9 +2,11 @@ use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, Signer},
-    transaction::Transaction,
+    transaction::{Transaction, VersionedTransaction},
     program_pack::Pack,
 };
+use solana_sdk::signers::Signers;
+use bincode;
 use base64::Engine;
 use std::str::FromStr;
 use tracing::info;
@@ -72,6 +74,8 @@ pub async fn execute_swap(
     quote: &JupiterQuote,
     args: &Args,
     config: &Config,
+    initial_sol_balance: f64,
+    initial_usdc_balance: f64,
 ) -> Result<String, TransactionError> {
     let http_client = reqwest::Client::new();
     
@@ -81,8 +85,7 @@ pub async fn execute_swap(
     let swap_request = serde_json::json!({
         "quoteResponse": quote.quote_data,
         "userPublicKey": wallet.pubkey().to_string(),
-        "wrapUnwrapSOL": true,
-        "asLegacyTransaction": true
+        "wrapUnwrapSOL": true
     });
     
     info!("Requesting swap transaction from Jupiter...");
@@ -112,28 +115,80 @@ pub async fn execute_swap(
     info!("Received serialized transaction (first 100 chars): {}", 
           &serialized_transaction[..std::cmp::min(100, serialized_transaction.len())]);
     
-    // Step 2: Deserialize and sign the transaction (using legacy format)
+    // Step 2: Deserialize and sign the transaction (using versioned format)
     let transaction_bytes = base64::engine::general_purpose::STANDARD.decode(serialized_transaction)?;
     
-    // Deserialize as regular Transaction (legacy format)
-    let mut transaction: Transaction = bincode::deserialize(&transaction_bytes)?;
+    // Deserialize as VersionedTransaction
+    let mut transaction: VersionedTransaction = bincode::deserialize(&transaction_bytes)?;
     
-    // Get recent blockhash and update transaction
+    // Get recent blockhash
     let recent_blockhash = client.get_latest_blockhash()
         .map_err(|e| TransactionError::SolanaRpc(format!("Failed to get blockhash: {}", e)))?;
-    transaction.message.recent_blockhash = recent_blockhash;
-    
-    // Sign the transaction
-    transaction.sign(&[wallet], recent_blockhash);
+    // Manually sign the versioned transaction
+    let message_data = transaction.message.serialize();
+    let signature = wallet.sign_message(&message_data);
+    if !transaction.signatures.is_empty() {
+        transaction.signatures[0] = signature;
+    } else {
+        transaction.signatures.push(signature);
+    }
     
     // Step 3: Send the transaction
     info!("Sending transaction to Solana network...");
     
-    let signature = client.send_and_confirm_transaction(&transaction)
+    // For VersionedTransaction, we need to use send_transaction and then confirm separately
+    let signature = client.send_transaction(&transaction)
         .map_err(|e| TransactionError::Transaction(format!("Transaction failed: {}", e)))?;
+    
+    // Wait for confirmation
+    client.confirm_transaction(&signature)
+        .map_err(|e| TransactionError::Transaction(format!("Transaction confirmation failed: {}", e)))?;
     
     info!("Transaction sent successfully!");
     info!("Signature: {}", signature);
+    
+    // Wait for transaction confirmation and then poll for balance changes
+    info!("Waiting for transaction confirmation...");
+    client.confirm_transaction(&signature)
+        .map_err(|e| TransactionError::Transaction(format!("Transaction confirmation failed: {}", e)))?;
+    
+    info!("Transaction confirmed! Polling for balance changes...");
+    
+    // Poll for balance changes every 5 seconds for up to 60 seconds
+    let mut attempts = 0;
+    let max_attempts = 12; // 60 seconds / 5 seconds
+    
+    while attempts < max_attempts {
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        attempts += 1;
+        
+        info!("Checking balance update (attempt {}/{}):", attempts, max_attempts);
+        
+        // Check if balances have changed
+        let current_sol = get_sol_balance(client, &wallet.pubkey())?;
+        let current_usdc = get_usdc_balance(client, &wallet.pubkey(), &config.usdc_mint)?;
+        
+        info!("  Current SOL: {:.6} SOL", current_sol);
+        info!("  Current USDC: {:.2} USDC", current_usdc);
+        
+        // If this is a USDC to SOL swap, check if SOL increased
+        if args.direction == "usdc-to-sol" {
+            if current_sol > initial_sol_balance {
+                info!("✅ Balance change detected! SOL increased from {:.6} to {:.6}", initial_sol_balance, current_sol);
+                break;
+            }
+        } else {
+            // SOL to USDC swap, check if USDC increased
+            if current_usdc > initial_usdc_balance {
+                info!("✅ Balance change detected! USDC increased from {:.2} to {:.2}", initial_usdc_balance, current_usdc);
+                break;
+            }
+        }
+        
+        if attempts >= max_attempts {
+            info!("⚠️  Balance change not detected after {} attempts. Transaction may still be processing.", max_attempts);
+        }
+    }
     
     Ok(signature.to_string())
 }
