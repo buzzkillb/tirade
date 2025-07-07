@@ -1220,13 +1220,13 @@ checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
 name = "database-service"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "axum",
  "chrono",
  "dotenv",
  "serde",
  "serde_json",
  "sqlx",
+ "thiserror",
  "tokio",
  "tower 0.4.13",
  "tower-http",
@@ -3014,12 +3014,14 @@ dependencies = [
 name = "price-feed"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "dotenv",
  "reqwest",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
