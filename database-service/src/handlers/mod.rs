@@ -1,12 +1,26 @@
 use crate::db::Database;
 use crate::models::{ApiResponse, CreateWalletRequest, StoreBalanceRequest, StorePriceRequest};
+use crate::indicators::{calculate_indicators, TechnicalIndicators};
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::Json,
 };
+use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{info, warn};
+
+#[derive(Debug, Deserialize)]
+pub struct PriceHistoryQuery {
+    pub hours: Option<i64>,
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IndicatorsQuery {
+    pub hours: Option<i64>,
+    pub source: Option<String>,
+}
 
 pub async fn health_check() -> Json<ApiResponse<String>> {
     Json(ApiResponse::success("Database service is healthy".to_string()))
@@ -110,6 +124,67 @@ pub async fn get_prices(
         }
         Err(e) => {
             warn!("Failed to get prices: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_price_history(
+    State(db): State<Arc<Database>>,
+    axum::extract::Path(pair): axum::extract::Path<String>,
+    Query(query): Query<PriceHistoryQuery>,
+) -> std::result::Result<Json<ApiResponse<Vec<crate::models::PriceFeed>>>, StatusCode> {
+    let hours = query.hours.unwrap_or(24);
+    
+    match db.get_price_history(&pair, hours).await {
+        Ok(prices) => {
+            info!("Retrieved {} price records for {} (last {} hours)", prices.len(), pair, hours);
+            Ok(Json(ApiResponse::success(prices)))
+        }
+        Err(e) => {
+            warn!("Failed to get price history: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_latest_price(
+    State(db): State<Arc<Database>>,
+    axum::extract::Path(pair): axum::extract::Path<String>,
+    Query(query): Query<PriceHistoryQuery>,
+) -> std::result::Result<Json<ApiResponse<Option<crate::models::PriceFeed>>>, StatusCode> {
+    let source = query.source.as_deref();
+    
+    match db.get_latest_price(&pair, source).await {
+        Ok(price) => {
+            Ok(Json(ApiResponse::success(price)))
+        }
+        Err(e) => {
+            warn!("Failed to get latest price: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_technical_indicators(
+    State(db): State<Arc<Database>>,
+    axum::extract::Path(pair): axum::extract::Path<String>,
+    Query(query): Query<IndicatorsQuery>,
+) -> std::result::Result<Json<ApiResponse<TechnicalIndicators>>, StatusCode> {
+    let hours = query.hours.unwrap_or(24);
+    
+    match db.get_price_history(&pair, hours).await {
+        Ok(prices) => {
+            if prices.is_empty() {
+                return Err(StatusCode::NOT_FOUND);
+            }
+            
+            let indicators = calculate_indicators(&prices);
+            info!("Calculated technical indicators for {} ({} data points)", pair, prices.len());
+            Ok(Json(ApiResponse::success(indicators)))
+        }
+        Err(e) => {
+            warn!("Failed to get technical indicators: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

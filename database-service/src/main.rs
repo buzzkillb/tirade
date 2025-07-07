@@ -2,6 +2,7 @@ mod config;
 mod db;
 mod error;
 mod handlers;
+mod indicators;
 mod models;
 
 use crate::config::Config;
@@ -9,6 +10,7 @@ use crate::db::Database;
 use crate::error::Result;
 use crate::handlers::{
     create_wallet, get_prices, get_wallet_balances, health_check, store_balance, store_price,
+    get_price_history, get_latest_price, get_technical_indicators,
 };
 use axum::{
     routing::{get, post},
@@ -49,6 +51,9 @@ async fn main() -> Result<()> {
         .route("/prices", post(store_price))
         .route("/wallets/:address/balances", get(get_wallet_balances))
         .route("/prices/:pair", get(get_prices))
+        .route("/prices/:pair/history", get(get_price_history))
+        .route("/prices/:pair/latest", get(get_latest_price))
+        .route("/indicators/:pair", get(get_technical_indicators))
         .layer(cors)
         .with_state(state);
     

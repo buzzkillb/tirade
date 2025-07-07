@@ -240,4 +240,72 @@ impl Database {
 
         Ok(prices)
     }
+
+    pub async fn get_price_history(&self, pair: &str, hours: i64) -> Result<Vec<PriceFeed>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, source, pair, price, timestamp
+            FROM price_feeds
+            WHERE pair = ? AND timestamp >= datetime('now', '-' || ? || ' hours')
+            ORDER BY timestamp ASC
+            "#,
+        )
+        .bind(pair)
+        .bind(hours.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let prices: Vec<PriceFeed> = rows
+            .into_iter()
+            .map(|row| PriceFeed {
+                id: row.try_get("id").unwrap_or_default(),
+                source: row.try_get("source").unwrap_or_default(),
+                pair: row.try_get("pair").unwrap_or_default(),
+                price: row.try_get("price").unwrap_or_default(),
+                timestamp: row.try_get("timestamp").unwrap_or_default(),
+            })
+            .collect();
+
+        Ok(prices)
+    }
+
+    pub async fn get_latest_price(&self, pair: &str, source: Option<&str>) -> Result<Option<PriceFeed>> {
+        let query = if let Some(src) = source {
+            sqlx::query(
+                r#"
+                SELECT id, source, pair, price, timestamp
+                FROM price_feeds
+                WHERE pair = ? AND source = ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+                "#,
+            )
+            .bind(pair)
+            .bind(src)
+        } else {
+            sqlx::query(
+                r#"
+                SELECT id, source, pair, price, timestamp
+                FROM price_feeds
+                WHERE pair = ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+                "#,
+            )
+            .bind(pair)
+        };
+
+        let row = query.fetch_optional(&self.pool).await?;
+
+        match row {
+            Some(row) => Ok(Some(PriceFeed {
+                id: row.try_get("id")?,
+                source: row.try_get("source")?,
+                pair: row.try_get("pair")?,
+                price: row.try_get("price")?,
+                timestamp: row.try_get("timestamp")?,
+            })),
+            None => Ok(None),
+        }
+    }
 } 
