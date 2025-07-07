@@ -4,6 +4,7 @@ use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, Signer},
     program_pack::Pack,
+    transaction::Transaction,
 };
 use std::str::FromStr;
 use tracing::info;
@@ -87,15 +88,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tx_signature = execute_swap(&client, &wallet, &quote, &args, &config).await?;
     info!("Transaction successful! Signature: {}", tx_signature);
     
-    // Wait a moment and check new balances
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    // Wait for transaction confirmation and check new balances
+    info!("Waiting for transaction confirmation...");
+    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
     
     let new_sol_balance = get_sol_balance(&client, &wallet.pubkey())?;
     let new_usdc_balance = get_usdc_balance(&client, &wallet.pubkey(), &config.usdc_mint)?;
     
-    info!("New balances:");
-    info!("  SOL: {:.6} SOL (change: {:.6})", new_sol_balance, new_sol_balance - sol_balance);
-    info!("  USDC: {:.2} USDC (change: {:.2})", new_usdc_balance, new_usdc_balance - usdc_balance);
+    let sol_change = new_sol_balance - sol_balance;
+    let usdc_change = new_usdc_balance - usdc_balance;
+    
+    info!("=== TRANSACTION RESULTS ===");
+    info!("Transaction Signature: {}", tx_signature);
+    info!("");
+    info!("BEFORE:");
+    info!("  SOL: {:.6} SOL", sol_balance);
+    info!("  USDC: {:.2} USDC", usdc_balance);
+    info!("");
+    info!("AFTER:");
+    info!("  SOL: {:.6} SOL", new_sol_balance);
+    info!("  USDC: {:.2} USDC", new_usdc_balance);
+    info!("");
+    info!("CHANGES:");
+    info!("  SOL: {:.6} SOL (received)", sol_change);
+    info!("  USDC: {:.2} USDC (spent)", usdc_change.abs());
+    info!("");
+    info!("JUPITER QUOTE vs ACTUAL:");
+    let quoted_sol = quote.output_amount.parse::<f64>().unwrap_or(0.0) / 1_000_000_000.0;
+    info!("  Quoted SOL: {:.6} SOL", quoted_sol);
+    info!("  Actual SOL: {:.6} SOL", sol_change);
+    info!("  Difference: {:.6} SOL ({:.4}%)", 
+          sol_change - quoted_sol, 
+          ((sol_change - quoted_sol) / quoted_sol * 100.0));
     
     Ok(())
 }
@@ -195,6 +219,7 @@ struct JupiterQuote {
     price_impact: f64,
     #[allow(dead_code)]
     routes: Vec<serde_json::Value>,
+    quote_data: serde_json::Value, // Store the full quote response
 }
 
 async fn get_jupiter_quote(args: &Args, config: &Config) -> Result<JupiterQuote, Box<dyn std::error::Error>> {
@@ -241,22 +266,73 @@ async fn get_jupiter_quote(args: &Args, config: &Config) -> Result<JupiterQuote,
         output_amount,
         price_impact,
         routes,
+        quote_data, // Store the full quote response
     })
 }
 
 async fn execute_swap(
-    _client: &RpcClient,
-    _wallet: &Keypair,
+    client: &RpcClient,
+    wallet: &Keypair,
     quote: &JupiterQuote,
-    _args: &Args,
-    _config: &Config,
+    args: &Args,
+    config: &Config,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    // This is a placeholder - you'll need to implement the actual swap execution
-    // using Jupiter's swap API or SDK
+    let http_client = reqwest::Client::new();
     
-    info!("TODO: Implement actual swap execution");
-    info!("Would execute swap with quote: {:?}", quote);
+    // Step 1: Get swap transaction from Jupiter
+    let swap_url = format!("{}/swap", config.jupiter_base_url);
     
-    // For now, return a dummy signature
-    Ok("dummy_signature_placeholder".to_string())
+    let swap_request = serde_json::json!({
+        "quoteResponse": quote.quote_data,
+        "userPublicKey": wallet.pubkey().to_string(),
+        "wrapUnwrapSOL": true,
+        "asLegacyTransaction": true
+    });
+    
+    info!("Requesting swap transaction from Jupiter...");
+    
+    let swap_response = http_client
+        .post(&swap_url)
+        .json(&swap_request)
+        .send()
+        .await?;
+    
+    let status = swap_response.status();
+    if !status.is_success() {
+        let error_text = swap_response.text().await?;
+        return Err(format!("Jupiter swap API error: {} - {}", status, error_text).into());
+    }
+    
+    let swap_data: serde_json::Value = swap_response.json().await?;
+    
+    // Extract the serialized transaction
+    let serialized_transaction = swap_data["swapTransaction"]
+        .as_str()
+        .ok_or("No swapTransaction in response")?;
+    
+    info!("Received serialized transaction (first 100 chars): {}", 
+          &serialized_transaction[..std::cmp::min(100, serialized_transaction.len())]);
+    
+    // Step 2: Deserialize and sign the transaction (using legacy format)
+    let transaction_bytes = base64::engine::general_purpose::STANDARD.decode(serialized_transaction)?;
+    
+    // Deserialize as regular Transaction (legacy format)
+    let mut transaction: Transaction = bincode::deserialize(&transaction_bytes)?;
+    
+    // Get recent blockhash and update transaction
+    let recent_blockhash = client.get_latest_blockhash()?;
+    transaction.message.recent_blockhash = recent_blockhash;
+    
+    // Sign the transaction
+    transaction.sign(&[wallet], recent_blockhash);
+    
+    // Step 3: Send the transaction
+    info!("Sending transaction to Solana network...");
+    
+    let signature = client.send_and_confirm_transaction(&transaction)?;
+    
+    info!("Transaction sent successfully!");
+    info!("Signature: {}", signature);
+    
+    Ok(signature.to_string())
 } 

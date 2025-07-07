@@ -4410,16 +4410,24 @@ name = "solana-trading-bot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.21.7",
+ "bincode",
  "bs58 0.5.1",
+ "chrono",
  "clap 4.5.40",
  "dotenv",
+ "reqwest",
  "serde",
  "serde_json",
+ "solana-account-decoder",
  "solana-client",
  "solana-program",
  "solana-sdk",
  "spl-token",
+ "thiserror",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
