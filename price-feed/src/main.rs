@@ -1,5 +1,6 @@
 mod api;
 mod config;
+mod database;
 mod error;
 mod price_feed;
 

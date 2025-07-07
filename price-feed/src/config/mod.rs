@@ -12,6 +12,7 @@ pub struct Config {
     pub usdc_mint: String,
     pub sol_amount: String,
     pub slippage_bps: u32,
+    pub database_url: String,
 }
 
 impl Config {
@@ -36,6 +37,8 @@ impl Config {
             usdc_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
             sol_amount: "1000000000".to_string(), // 1 SOL in lamports
             slippage_bps: 50,
+            database_url: env::var("PRICE_FEED_DATABASE_URL")
+                .unwrap_or_else(|_| "http://localhost:8080".to_string()),
         })
     }
 } 

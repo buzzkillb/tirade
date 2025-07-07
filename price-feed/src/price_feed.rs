@@ -1,5 +1,6 @@
 use crate::api::{JupiterClient, PythClient};
 use crate::config::Config;
+use crate::database::DatabaseClient;
 use crate::error::Result;
 use std::time::Duration;
 use tokio::time;
@@ -8,6 +9,7 @@ use tracing::{error, info};
 pub struct PriceFeedService {
     pyth_client: PythClient,
     jupiter_client: JupiterClient,
+    database_client: DatabaseClient,
     config: Config,
 }
 
@@ -15,10 +17,12 @@ impl PriceFeedService {
     pub fn new(config: Config) -> Self {
         let pyth_client = PythClient::new(config.clone());
         let jupiter_client = JupiterClient::new(config.clone());
+        let database_client = DatabaseClient::new(&config);
 
         Self {
             pyth_client,
             jupiter_client,
+            database_client,
             config,
         }
     }
@@ -53,8 +57,12 @@ impl PriceFeedService {
             
             match client.fetch_sol_price().await {
                 Ok(price) => {
-                    // TODO: Store price in database
                     info!("Pyth SOL/USD price: ${:.4}", price);
+                    
+                    // Store in database with retry logic
+                    if let Err(e) = Self::store_pyth_price(price).await {
+                        error!("Failed to store Pyth price in database: {}", e);
+                    }
                 }
                 Err(e) => {
                     error!("Failed to fetch Pyth price: {}", e);
@@ -71,13 +79,35 @@ impl PriceFeedService {
             
             match client.fetch_sol_usdc_price().await {
                 Ok(price) => {
-                    // TODO: Store price in database
                     info!("Jupiter SOL/USDC price: ${:.4}", price);
+                    
+                    // Store in database with retry logic
+                    if let Err(e) = Self::store_jupiter_price(price).await {
+                        error!("Failed to store Jupiter price in database: {}", e);
+                    }
                 }
                 Err(e) => {
                     error!("Failed to fetch Jupiter price: {}", e);
                 }
             }
         }
+    }
+
+    async fn store_pyth_price(price: f64) -> Result<()> {
+        // Create a temporary database client for this operation
+        let config = Config::from_env()?;
+        let db_client = DatabaseClient::new(&config);
+        
+        // Store with retry logic (3 attempts)
+        db_client.store_price_with_retry("pyth", "SOL/USD", price, 3).await
+    }
+
+    async fn store_jupiter_price(price: f64) -> Result<()> {
+        // Create a temporary database client for this operation
+        let config = Config::from_env()?;
+        let db_client = DatabaseClient::new(&config);
+        
+        // Store with retry logic (3 attempts)
+        db_client.store_price_with_retry("jupiter", "SOL/USDC", price, 3).await
     }
 } 
