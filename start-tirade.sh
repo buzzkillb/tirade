@@ -61,7 +61,16 @@ start_service() {
     
     # Start the service in background
     echo "   🔄 Starting $binary_name..."
-    DATABASE_URL="http://localhost:8080" cargo run --bin $binary_name &
+    
+    # Set appropriate database URL based on service
+    if [ "$binary_name" = "database-service" ]; then
+        # Database service needs SQLite file path
+        DATABASE_URL="sqlite:data/trading_bot.db" cargo run --bin $binary_name &
+    else
+        # Other services need HTTP URL to connect to database service
+        DATABASE_URL="http://localhost:8080" cargo run --bin $binary_name &
+    fi
+    
     local pid=$!
     
     # Check if the process started successfully
