@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::models::{PriceFeed, TechnicalIndicators, TradingSignal, SignalType};
 use crate::models::{TechnicalIndicator, TradingSignalDb, PositionDb, TradeDb, TradingConfigDb};
 use crate::strategy::TradingStrategy;
+use crate::trading_executor::TradingExecutor;
 use anyhow::{Result, anyhow};
 use reqwest::Client;
 use std::time::Duration;
@@ -15,6 +16,7 @@ pub struct TradingEngine {
     client: Client,
     current_position: Option<Position>,
     last_analysis_time: Option<chrono::DateTime<Utc>>,
+    trading_executor: TradingExecutor,
 }
 
 #[derive(Debug, Clone)]
@@ -37,6 +39,7 @@ impl TradingEngine {
             .build()?;
 
         let strategy = TradingStrategy::new(config.clone());
+        let trading_executor = TradingExecutor::new()?;
 
         Ok(Self {
             config,
@@ -44,6 +47,7 @@ impl TradingEngine {
             client,
             current_position: None,
             last_analysis_time: None,
+            trading_executor,
         })
     }
 
@@ -56,6 +60,10 @@ impl TradingEngine {
         info!("  🛑 Stop Loss: {:.2}%", self.config.stop_loss_threshold * 100.0);
         info!("  💰 Take Profit: {:.2}%", self.config.take_profit_threshold * 100.0);
         info!("  🌐 Database URL: {}", self.config.database_url);
+        info!("  🔄 Trading Execution: {}", if self.trading_executor.is_trading_enabled() { "ENABLED" } else { "PAPER TRADING" });
+        info!("  💰 Position Size: {:.1}% of balance", self.trading_executor.get_position_size_percentage() * 100.0);
+        info!("  📊 Slippage Tolerance: {:.1}%", self.trading_executor.get_slippage_tolerance() * 100.0);
+        info!("  🎯 Min Confidence: {:.1}%", self.trading_executor.get_min_confidence_threshold() * 100.0);
         info!("═══════════════════════════════════════════════════════════════");
         info!("");
 
@@ -230,27 +238,38 @@ impl TradingEngine {
         match signal.signal_type {
             SignalType::Buy => {
                 if self.current_position.is_none() {
-                    // Open long position
-                    self.open_position(signal.price, PositionType::Long).await?;
-                    
-                    // Post position to database
-                    if let Some(position) = &self.current_position {
-                        if let Err(e) = self.post_position(position, signal.take_profit, signal.stop_loss).await {
-                            warn!("Failed to post position: {}", e);
+                    // Execute the trade using trading executor
+                    match self.trading_executor.execute_signal(signal).await {
+                        Ok(true) => {
+                            // Trade executed successfully (or paper trading)
+                            self.open_position(signal.price, PositionType::Long).await?;
+                            
+                            // Post position to database
+                            if let Some(position) = &self.current_position {
+                                if let Err(e) = self.post_position(position, signal.take_profit, signal.stop_loss).await {
+                                    warn!("Failed to post position: {}", e);
+                                }
+                            }
+                            
+                            info!("");
+                            info!("🟢 BUY SIGNAL EXECUTED");
+                            info!("═══════════════════════════════════════════════════════════════");
+                            info!("  💰 Entry Price: ${:.4}", signal.price);
+                            info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
+                            info!("  📊 Position Type: Long");
+                            info!("  🎯 Dynamic Take Profit: {:.2}%", signal.take_profit * 100.0);
+                            info!("  🛑 Dynamic Stop Loss: {:.2}%", signal.stop_loss * 100.0);
+                            info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
+                            info!("═══════════════════════════════════════════════════════════════");
+                            info!("");
+                        }
+                        Ok(false) => {
+                            warn!("⚠️  BUY signal execution failed or was skipped");
+                        }
+                        Err(e) => {
+                            error!("❌ BUY signal execution error: {}", e);
                         }
                     }
-                    
-                    info!("");
-                    info!("🟢 BUY SIGNAL EXECUTED");
-                    info!("═══════════════════════════════════════════════════════════════");
-                    info!("  💰 Entry Price: ${:.4}", signal.price);
-                    info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
-                    info!("  📊 Position Type: Long");
-                    info!("  🎯 Dynamic Take Profit: {:.2}%", signal.take_profit * 100.0);
-                    info!("  🛑 Dynamic Stop Loss: {:.2}%", signal.stop_loss * 100.0);
-                    info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
-                    info!("═══════════════════════════════════════════════════════════════");
-                    info!("");
                 } else {
                     debug!("Already in position, ignoring BUY signal");
                 }
@@ -262,31 +281,42 @@ impl TradingEngine {
                     let entry_time = position.entry_time;
                     let position_type = position.position_type.clone();
                     
-                    // Close position
-                    let pnl = self.calculate_pnl(signal.price, position);
-                    let duration = Utc::now() - entry_time;
-                    self.close_position(signal.price).await?;
-                    
-                    // Post trade to database
-                    if let Err(e) = self.post_trade(entry_price, signal.price, entry_time, &position_type, pnl).await {
-                        warn!("Failed to post trade: {}", e);
+                    // Execute the trade using trading executor
+                    match self.trading_executor.execute_signal(signal).await {
+                        Ok(true) => {
+                            // Trade executed successfully (or paper trading)
+                            let pnl = self.calculate_pnl(signal.price, position);
+                            let duration = Utc::now() - entry_time;
+                            self.close_position(signal.price).await?;
+                            
+                            // Post trade to database
+                            if let Err(e) = self.post_trade(entry_price, signal.price, entry_time, &position_type, pnl).await {
+                                warn!("Failed to post trade: {}", e);
+                            }
+                            
+                            let pnl_emoji = if pnl > 0.0 { "💰" } else if pnl < 0.0 { "💸" } else { "➡️" };
+                            let pnl_status = if pnl > 0.0 { "PROFIT" } else if pnl < 0.0 { "LOSS" } else { "BREAKEVEN" };
+                            
+                            info!("");
+                            info!("🔴 SELL SIGNAL EXECUTED - {}", pnl_status);
+                            info!("═══════════════════════════════════════════════════════════════");
+                            info!("  💰 Exit Price: ${:.4}", signal.price);
+                            info!("  📈 Entry Price: ${:.4}", entry_price);
+                            info!("  {} PnL: {:.2}%", pnl_emoji, pnl * 100.0);
+                            info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
+                            info!("  ⏱️  Duration: {}s", duration.num_seconds());
+                            info!("  📊 Position Type: {:?}", position_type);
+                            info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
+                            info!("═══════════════════════════════════════════════════════════════");
+                            info!("");
+                        }
+                        Ok(false) => {
+                            warn!("⚠️  SELL signal execution failed or was skipped");
+                        }
+                        Err(e) => {
+                            error!("❌ SELL signal execution error: {}", e);
+                        }
                     }
-                    
-                    let pnl_emoji = if pnl > 0.0 { "💰" } else if pnl < 0.0 { "💸" } else { "➡️" };
-                    let pnl_status = if pnl > 0.0 { "PROFIT" } else if pnl < 0.0 { "LOSS" } else { "BREAKEVEN" };
-                    
-                    info!("");
-                    info!("🔴 SELL SIGNAL EXECUTED - {}", pnl_status);
-                    info!("═══════════════════════════════════════════════════════════════");
-                    info!("  💰 Exit Price: ${:.4}", signal.price);
-                    info!("  📈 Entry Price: ${:.4}", entry_price);
-                    info!("  {} PnL: {:.2}%", pnl_emoji, pnl * 100.0);
-                    info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
-                    info!("  ⏱️  Duration: {}s", duration.num_seconds());
-                    info!("  📊 Position Type: {:?}", position_type);
-                    info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
-                    info!("═══════════════════════════════════════════════════════════════");
-                    info!("");
                 } else {
                     debug!("No position to sell");
                 }

@@ -2,6 +2,7 @@ mod config;
 mod models;
 mod strategy;
 mod trading_engine;
+mod trading_executor;
 
 use anyhow::Result;
 use tracing::info;
@@ -15,8 +16,11 @@ async fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt::init();
     
-    // Load configuration
-    dotenv::dotenv().ok();
+    // Load configuration from project root .env file
+    let project_root = std::env::current_dir()?.join("..");
+    let env_path = project_root.join(".env");
+    info!("Looking for .env file at: {:?}", env_path);
+    dotenv::from_path(&env_path).ok();
     let config = Config::from_env()?;
     
     info!("Starting Trading Logic Engine");

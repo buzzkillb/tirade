@@ -20,7 +20,7 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
-            database_url: env::var("DATABASE_URL")
+            database_url: env::var("PRICE_FEED_DATABASE_URL")
                 .unwrap_or_else(|_| "http://localhost:8080".to_string()),
             trading_pair: env::var("TRADING_PAIR")
                 .unwrap_or_else(|_| "SOL/USDC".to_string()),
