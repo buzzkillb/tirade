@@ -34,6 +34,19 @@ if [ ! -f "data/trading_bot.db" ]; then
 else
     echo "   ✅ Database already exists"
 fi
+
+# Ensure database file has proper permissions
+if [ -f "data/trading_bot.db" ]; then
+    chmod 644 data/trading_bot.db
+    echo "   ✅ Database permissions set"
+fi
+
+# Ensure data directory exists and has proper permissions
+if [ ! -d "data" ]; then
+    mkdir -p data
+    echo "   ✅ Data directory created"
+fi
+
 echo ""
 
 # Function to start a service
@@ -53,24 +66,46 @@ start_service() {
     echo "   ✅ $service_name started (PID: $pid)"
     echo ""
     
-    # Wait a bit for service to initialize
-    sleep 3
+    # Wait longer for service to initialize and be ready
+    echo "   ⏳ Waiting for $service_name to be ready..."
+    sleep 5
     
-    return $pid
+    # Check if service is responding (for database service)
+    if [ "$port" != "N/A" ]; then
+        local max_attempts=10
+        local attempt=1
+        while [ $attempt -le $max_attempts ]; do
+            echo "   🔍 Testing connection to http://localhost:$port/health..."
+            if curl -s "http://localhost:$port/health" > /dev/null 2>&1; then
+                echo "   ✅ $service_name is ready and responding"
+                break
+            else
+                echo "   ⏳ Attempt $attempt/$max_attempts: $service_name not ready yet..."
+                echo "   🔍 Debug: curl exit code: $?"
+                sleep 2
+                attempt=$((attempt + 1))
+            fi
+        done
+        
+        if [ $attempt -gt $max_attempts ]; then
+            echo "   ⚠️  Warning: $service_name may not be fully ready, but continuing..."
+            echo "   🔍 Debug: Service may need more time to start"
+        fi
+    fi
+    
+    echo ""
+    echo $pid
 }
 
 # Start services in order
 echo "📊 Starting Database Service..."
-start_service "Database Service" "database-service" "8080"
-DB_PID=$!
+DB_PID=$(start_service "Database Service" "database-service" "8080")
 
 echo "📈 Starting Price Feed..."
-start_service "Price Feed" "price-feed" "8081"
-PRICE_PID=$!
+PRICE_PID=$(start_service "Price Feed" "price-feed" "8081")
 
 echo "🧠 Starting Trading Logic..."
-start_service "Trading Logic" "trading-logic" "N/A"
-TRADING_PID=$!
+TRADING_PID=$(start_service "Trading Logic" "trading-logic" "N/A")
 
 echo "🌐 Starting Dashboard..."
 echo "   Note: Dashboard will bind to localhost (127.0.0.1) for security"
