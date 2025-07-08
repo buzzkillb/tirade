@@ -1,12 +1,13 @@
 use crate::config::Config;
 use crate::models::{PriceFeed, TechnicalIndicators, TradingSignal, SignalType};
+use crate::models::{TechnicalIndicator, TradingSignalDb, PositionDb, TradeDb, TradingConfigDb};
 use crate::strategy::TradingStrategy;
 use anyhow::{Result, anyhow};
 use reqwest::Client;
 use std::time::Duration;
 
 use tracing::{info, warn, error, debug};
-use chrono::Utc;
+use chrono::{Utc, DateTime};
 
 pub struct TradingEngine {
     config: Config,
@@ -57,6 +58,16 @@ impl TradingEngine {
         info!("  🌐 Database URL: {}", self.config.database_url);
         info!("═══════════════════════════════════════════════════════════════");
         info!("");
+
+        // Post initial trading config to database
+        if let Err(e) = self.post_trading_config().await {
+            warn!("Failed to post initial trading config: {}", e);
+        }
+
+        // Recover positions from database
+        if let Err(e) = self.recover_positions().await {
+            warn!("Failed to recover positions: {}", e);
+        }
 
         loop {
             match self.trading_cycle().await {
@@ -137,8 +148,18 @@ impl TradingEngine {
         // Step 3: Fetch technical indicators
         let indicators = self.fetch_technical_indicators().await?;
 
+        // Step 3.5: Post all technical indicators to database
+        if let Err(e) = self.post_all_indicators(&indicators).await {
+            warn!("Failed to post indicators: {}", e);
+        }
+
         // Step 4: Analyze and generate signal
         let signal = self.strategy.analyze(&prices, &indicators);
+
+        // Step 4.5: Post trading signal to database
+        if let Err(e) = self.post_trading_signal(&signal).await {
+            warn!("Failed to post signal: {}", e);
+        }
 
         // Step 5: Execute trading logic
         self.execute_signal(&signal).await?;
@@ -156,12 +177,17 @@ impl TradingEngine {
             urlencoding::encode(&self.config.trading_pair)
         );
 
+        info!("🔍 Fetching data point count from: {}", url);
+        
         let response = self.client.get(&url).send().await?;
         let api_response: crate::models::ApiResponse<Vec<PriceFeed>> = response.json().await?;
+
+        info!("📊 API Response - Success: {}, Data points: {}", api_response.success, api_response.data.len());
 
         if api_response.success {
             Ok(api_response.data.len())
         } else {
+            warn!("⚠️ API call failed: {:?}", api_response.message);
             Ok(0)
         }
     }
@@ -206,6 +232,14 @@ impl TradingEngine {
                 if self.current_position.is_none() {
                     // Open long position
                     self.open_position(signal.price, PositionType::Long).await?;
+                    
+                    // Post position to database
+                    if let Some(position) = &self.current_position {
+                        if let Err(e) = self.post_position(position, signal.take_profit, signal.stop_loss).await {
+                            warn!("Failed to post position: {}", e);
+                        }
+                    }
+                    
                     info!("");
                     info!("🟢 BUY SIGNAL EXECUTED");
                     info!("═══════════════════════════════════════════════════════════════");
@@ -232,6 +266,11 @@ impl TradingEngine {
                     let pnl = self.calculate_pnl(signal.price, position);
                     let duration = Utc::now() - entry_time;
                     self.close_position(signal.price).await?;
+                    
+                    // Post trade to database
+                    if let Err(e) = self.post_trade(entry_price, signal.price, entry_time, &position_type, pnl).await {
+                        warn!("Failed to post trade: {}", e);
+                    }
                     
                     let pnl_emoji = if pnl > 0.0 { "💰" } else if pnl < 0.0 { "💸" } else { "➡️" };
                     let pnl_status = if pnl > 0.0 { "PROFIT" } else if pnl < 0.0 { "LOSS" } else { "BREAKEVEN" };
@@ -261,8 +300,14 @@ impl TradingEngine {
                     if pnl < -signal.stop_loss {
                         let entry_price = position.entry_price;
                         let entry_time = position.entry_time;
+                        let position_type = position.position_type.clone();
                         let duration = Utc::now() - entry_time;
                         self.close_position(signal.price).await?;
+                        
+                        // Post trade to database
+                        if let Err(e) = self.post_trade(entry_price, signal.price, entry_time, &position_type, pnl).await {
+                            warn!("Failed to post trade: {}", e);
+                        }
                         
                         info!("");
                         info!("🛑 DYNAMIC STOP LOSS TRIGGERED");
@@ -280,8 +325,14 @@ impl TradingEngine {
                     else if pnl > signal.take_profit {
                         let entry_price = position.entry_price;
                         let entry_time = position.entry_time;
+                        let position_type = position.position_type.clone();
                         let duration = Utc::now() - entry_time;
                         self.close_position(signal.price).await?;
+                        
+                        // Post trade to database
+                        if let Err(e) = self.post_trade(entry_price, signal.price, entry_time, &position_type, pnl).await {
+                            warn!("Failed to post trade: {}", e);
+                        }
                         
                         info!("");
                         info!("💰 DYNAMIC TAKE PROFIT TRIGGERED");
@@ -426,5 +477,303 @@ impl TradingEngine {
         
         info!("═══════════════════════════════════════════════════════════════");
         info!("");
+    }
+
+    // Database API methods for posting data
+    async fn post_technical_indicator(&self, indicator: &TechnicalIndicator) -> Result<()> {
+        let url = format!("{}/indicators/{}/store", self.config.database_url, 
+                         urlencoding::encode(&indicator.pair));
+        
+        // Convert to the format expected by the database service
+        let store_request = crate::models::StoreTechnicalIndicatorsRequest {
+            pair: indicator.pair.clone(),
+            sma_20: if indicator.indicator_type == "SMA" && indicator.period == Some(20) { Some(indicator.value) } else { None },
+            sma_50: if indicator.indicator_type == "SMA" && indicator.period == Some(50) { Some(indicator.value) } else { None },
+            sma_200: if indicator.indicator_type == "SMA" && indicator.period == Some(200) { Some(indicator.value) } else { None },
+            rsi_14: if indicator.indicator_type == "RSI" { Some(indicator.value) } else { None },
+            price_change_24h: None,
+            price_change_percent_24h: None,
+            volatility_24h: if indicator.indicator_type == "Volatility" { Some(indicator.value) } else { None },
+            current_price: indicator.value,
+        };
+        
+        let response = self.client.post(&url)
+            .json(&store_request)
+            .send()
+            .await?;
+            
+        if !response.status().is_success() {
+            warn!("Failed to post technical indicator: {}", response.status());
+        } else {
+            debug!("Posted technical indicator: {} = {:.4}", indicator.indicator_type, indicator.value);
+        }
+        
+        Ok(())
+    }
+
+    async fn post_trading_signal(&self, signal: &TradingSignal) -> Result<()> {
+        let signal_db = TradingSignalDb {
+            pair: self.config.trading_pair.clone(),
+            timestamp: signal.timestamp,
+            signal_type: match signal.signal_type {
+                SignalType::Buy => "buy".to_string(),
+                SignalType::Sell => "sell".to_string(),
+                SignalType::Hold => "hold".to_string(),
+            },
+            confidence: signal.confidence,
+            price: signal.price,
+            reasoning: signal.reasoning.join("; "),
+            take_profit: signal.take_profit,
+            stop_loss: signal.stop_loss,
+        };
+
+        let url = format!("{}/signals", self.config.database_url);
+        
+        let response = self.client.post(&url)
+            .json(&signal_db)
+            .send()
+            .await?;
+            
+        if !response.status().is_success() {
+            warn!("Failed to post trading signal: {}", response.status());
+        } else {
+            debug!("Posted trading signal: {:?} (confidence: {:.1}%)", signal.signal_type, signal.confidence * 100.0);
+        }
+        
+        Ok(())
+    }
+
+    async fn post_position(&self, position: &Position, take_profit: f64, stop_loss: f64) -> Result<()> {
+        let position_db = PositionDb {
+            pair: self.config.trading_pair.clone(),
+            position_type: match position.position_type {
+                PositionType::Long => "long".to_string(),
+                PositionType::Short => "short".to_string(),
+            },
+            entry_price: position.entry_price,
+            entry_time: position.entry_time,
+            quantity: 1.0, // Default quantity
+            status: "open".to_string(),
+            take_profit,
+            stop_loss,
+        };
+
+        let url = format!("{}/positions", self.config.database_url);
+        
+        let response = self.client.post(&url)
+            .json(&position_db)
+            .send()
+            .await?;
+            
+        if !response.status().is_success() {
+            warn!("Failed to post position: {}", response.status());
+        } else {
+            debug!("Posted position: {:?} at ${:.4}", position.position_type, position.entry_price);
+        }
+        
+        Ok(())
+    }
+
+    async fn post_trade(&self, entry_price: f64, exit_price: f64, entry_time: DateTime<Utc>, 
+                       position_type: &PositionType, pnl: f64) -> Result<()> {
+        let trade_db = TradeDb {
+            pair: self.config.trading_pair.clone(),
+            trade_type: match position_type {
+                PositionType::Long => "long".to_string(),
+                PositionType::Short => "short".to_string(),
+            },
+            entry_price,
+            exit_price,
+            quantity: 1.0, // Default quantity
+            entry_time,
+            exit_time: Utc::now(),
+            pnl,
+            pnl_percent: pnl * 100.0,
+            signal_id: None, // Could be linked to signal ID if available
+        };
+
+        let url = format!("{}/trades", self.config.database_url);
+        
+        let response = self.client.post(&url)
+            .json(&trade_db)
+            .send()
+            .await?;
+            
+        if !response.status().is_success() {
+            warn!("Failed to post trade: {}", response.status());
+        } else {
+            let pnl_emoji = if pnl > 0.0 { "💰" } else if pnl < 0.0 { "💸" } else { "➡️" };
+            debug!("Posted trade: {} PnL: {:.2}%", pnl_emoji, pnl * 100.0);
+        }
+        
+        Ok(())
+    }
+
+    async fn post_trading_config(&self) -> Result<()> {
+        let config_db = TradingConfigDb {
+            pair: self.config.trading_pair.clone(),
+            strategy_name: "RSI_Trend_Strategy".to_string(),
+            rsi_oversold: 30.0,
+            rsi_overbought: 70.0,
+            take_profit_threshold: self.config.take_profit_threshold,
+            stop_loss_threshold: self.config.stop_loss_threshold,
+            min_confidence: 0.4,
+            is_active: true,
+            created_at: Utc::now(),
+        };
+
+        let url = format!("{}/configs", self.config.database_url);
+        
+        let response = self.client.post(&url)
+            .json(&config_db)
+            .send()
+            .await?;
+            
+        if !response.status().is_success() {
+            warn!("Failed to post trading config: {}", response.status());
+        } else {
+            debug!("Posted trading config for {}", self.config.trading_pair);
+        }
+        
+        Ok(())
+    }
+
+    async fn post_all_indicators(&self, indicators: &TechnicalIndicators) -> Result<()> {
+        let now = Utc::now();
+        
+        // Post RSI
+        if let Some(rsi) = indicators.rsi_14 {
+            let rsi_indicator = TechnicalIndicator {
+                pair: self.config.trading_pair.clone(),
+                timestamp: now,
+                indicator_type: "RSI".to_string(),
+                value: rsi,
+                period: Some(14),
+            };
+            self.post_technical_indicator(&rsi_indicator).await?;
+        }
+
+        // Post SMA indicators
+        if let Some(sma_20) = indicators.sma_20 {
+            let sma_indicator = TechnicalIndicator {
+                pair: self.config.trading_pair.clone(),
+                timestamp: now,
+                indicator_type: "SMA".to_string(),
+                value: sma_20,
+                period: Some(20),
+            };
+            self.post_technical_indicator(&sma_indicator).await?;
+        }
+
+        if let Some(sma_50) = indicators.sma_50 {
+            let sma_indicator = TechnicalIndicator {
+                pair: self.config.trading_pair.clone(),
+                timestamp: now,
+                indicator_type: "SMA".to_string(),
+                value: sma_50,
+                period: Some(50),
+            };
+            self.post_technical_indicator(&sma_indicator).await?;
+        }
+
+        if let Some(sma_200) = indicators.sma_200 {
+            let sma_indicator = TechnicalIndicator {
+                pair: self.config.trading_pair.clone(),
+                timestamp: now,
+                indicator_type: "SMA".to_string(),
+                value: sma_200,
+                period: Some(200),
+            };
+            self.post_technical_indicator(&sma_indicator).await?;
+        }
+
+        // Post volatility
+        if let Some(volatility) = indicators.volatility_24h {
+            let vol_indicator = TechnicalIndicator {
+                pair: self.config.trading_pair.clone(),
+                timestamp: now,
+                indicator_type: "Volatility".to_string(),
+                value: volatility,
+                period: None,
+            };
+            self.post_technical_indicator(&vol_indicator).await?;
+        }
+
+        Ok(())
+    }
+
+    // Position persistence methods
+    async fn fetch_open_positions(&self) -> Result<Option<Position>> {
+        let url = format!("{}/positions/pair/{}/open", self.config.database_url, 
+                         urlencoding::encode(&self.config.trading_pair));
+        
+        let response = self.client.get(&url).send().await?;
+        
+        if response.status().is_success() {
+            let api_response: crate::models::ApiResponse<Option<PositionDb>> = response.json().await?;
+            
+            if api_response.success {
+                if let Some(position_db) = api_response.data {
+                    let position = Position {
+                        entry_price: position_db.entry_price,
+                        entry_time: position_db.entry_time,
+                        position_type: match position_db.position_type.as_str() {
+                            "long" => PositionType::Long,
+                            "short" => PositionType::Short,
+                            _ => return Err(anyhow!("Invalid position type: {}", position_db.position_type)),
+                        },
+                    };
+                    Ok(Some(position))
+                } else {
+                    Ok(None)
+                }
+            } else {
+                warn!("Failed to fetch open positions: {:?}", api_response.message);
+                Ok(None)
+            }
+        } else {
+            warn!("Failed to fetch open positions: {}", response.status());
+            Ok(None)
+        }
+    }
+
+    async fn update_position_status(&self, position_id: &str, status: &str) -> Result<()> {
+        let url = format!("{}/positions/{}/status", self.config.database_url, position_id);
+        
+        let update_data = serde_json::json!({
+            "status": status
+        });
+        
+        let response = self.client.patch(&url)
+            .json(&update_data)
+            .send()
+            .await?;
+            
+        if !response.status().is_success() {
+            warn!("Failed to update position status: {}", response.status());
+        } else {
+            debug!("Updated position {} status to {}", position_id, status);
+        }
+        
+        Ok(())
+    }
+
+    async fn recover_positions(&mut self) -> Result<()> {
+        info!("🔄 Recovering positions from database...");
+        
+        if let Some(position) = self.fetch_open_positions().await? {
+            self.current_position = Some(position.clone());
+            info!("📈 Recovered {} position: Entry ${:.4} at {}", 
+                  match position.position_type {
+                      PositionType::Long => "Long",
+                      PositionType::Short => "Short",
+                  },
+                  position.entry_price,
+                  position.entry_time.format("%Y-%m-%d %H:%M:%S UTC"));
+        } else {
+            info!("💤 No open positions found in database");
+        }
+        
+        Ok(())
     }
 } 

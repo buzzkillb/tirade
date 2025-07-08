@@ -11,6 +11,10 @@ use crate::error::Result;
 use crate::handlers::{
     create_wallet, get_prices, get_wallet_balances, health_check, store_balance, store_price,
     get_price_history, get_latest_price, get_technical_indicators,
+    store_technical_indicators, get_latest_technical_indicators, store_trading_signal,
+    get_trading_signals, create_position, close_position, get_open_positions,
+    get_position_history, create_trading_config, get_trading_config,
+    get_open_positions_by_pair, update_position_status,
 };
 use axum::{
     routing::{get, post},
@@ -54,6 +58,19 @@ async fn main() -> Result<()> {
         .route("/prices/:pair/history", get(get_price_history))
         .route("/prices/:pair/latest", get(get_latest_price))
         .route("/indicators/:pair", get(get_technical_indicators))
+        // New enhanced routes
+        .route("/indicators/:pair/store", post(store_technical_indicators))
+        .route("/indicators/:pair/latest", get(get_latest_technical_indicators))
+        .route("/signals", post(store_trading_signal))
+        .route("/signals/:pair", get(get_trading_signals))
+        .route("/positions", post(create_position))
+        .route("/positions/close", post(close_position))
+        .route("/positions/:address/open", get(get_open_positions))
+        .route("/positions/:address/history", get(get_position_history))
+        .route("/positions/pair/:pair/open", get(get_open_positions_by_pair))
+        .route("/positions/:position_id/status", axum::routing::patch(update_position_status))
+        .route("/configs", post(create_trading_config))
+        .route("/configs/:name", get(get_trading_config))
         .layer(cors)
         .with_state(state);
     

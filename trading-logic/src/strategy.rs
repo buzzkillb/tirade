@@ -170,6 +170,10 @@ impl TradingStrategy {
         let mut reasoning = Vec::new();
         let mut signal_type = SignalType::Hold;
 
+        // Debug: Log the indicator values
+        info!("🔍 Strategy Debug - RSI Fast: {:?}, RSI Slow: {:?}, SMA Short: {:?}, SMA Long: {:?}, Volatility: {:?}", 
+              indicators.rsi_fast, indicators.rsi_slow, indicators.sma_short, indicators.sma_long, indicators.volatility);
+
         // Strategy 1: RSI Divergence Signal (with dynamic thresholds)
         if let (Some(rsi_fast), Some(rsi_slow)) = (indicators.rsi_fast, indicators.rsi_slow) {
             // Buy signal: Fast RSI crosses above slow RSI from oversold
@@ -260,7 +264,22 @@ impl TradingStrategy {
             }
         }
 
-        // Strategy 5: Price Momentum Confirmation (with dynamic thresholds)
+        // Strategy 5: Simple RSI Overbought/Oversold (should trigger more easily)
+        if let Some(rsi_fast) = indicators.rsi_fast {
+            if rsi_fast > dynamic_thresholds.rsi_overbought && signal_type == SignalType::Hold {
+                signal_type = SignalType::Sell;
+                confidence += 0.35;
+                reasoning.push(format!("RSI overbought: RSI ({:.2}) > {:.1}", 
+                                     rsi_fast, dynamic_thresholds.rsi_overbought));
+            } else if rsi_fast < dynamic_thresholds.rsi_oversold && signal_type == SignalType::Hold {
+                signal_type = SignalType::Buy;
+                confidence += 0.35;
+                reasoning.push(format!("RSI oversold: RSI ({:.2}) < {:.1}", 
+                                     rsi_fast, dynamic_thresholds.rsi_oversold));
+            }
+        }
+
+        // Strategy 6: Price Momentum Confirmation (with dynamic thresholds)
         if indicators.price_change_percent.abs() > dynamic_thresholds.momentum_threshold {
             if indicators.price_change_percent > dynamic_thresholds.momentum_threshold && signal_type == SignalType::Buy {
                 confidence += 0.1;
@@ -270,6 +289,35 @@ impl TradingStrategy {
                 confidence += 0.1;
                 reasoning.push(format!("Momentum confirmation: {:.2}% price decrease (threshold: {:.2}%)", 
                                      indicators.price_change_percent * 100.0, dynamic_thresholds.momentum_threshold * 100.0));
+            }
+        }
+
+        // Strategy 7: Trend Following (should trigger with current conditions)
+        if let (Some(sma_short), Some(rsi_fast)) = (indicators.sma_short, indicators.rsi_fast) {
+            // Bullish trend: Price above SMA and RSI in bullish territory (40-70)
+            if current_price > sma_short && rsi_fast >= 40.0 && rsi_fast <= 70.0 {
+                info!("[Trend Debug] Bullish: price {:.4} > SMA {:.4}, RSI {:.2}", current_price, sma_short, rsi_fast);
+                if signal_type == SignalType::Buy {
+                    confidence += 0.25;
+                } else {
+                    signal_type = SignalType::Buy;
+                    confidence += 0.25;
+                }
+                reasoning.push(format!("Trend following: Price (${:.4}) above SMA (${:.4}), RSI ({:.2}) in bullish range", 
+                                     current_price, sma_short, rsi_fast));
+            }
+            
+            // Bearish trend: Price below SMA and RSI in bearish territory (30-60)
+            if current_price < sma_short && rsi_fast >= 30.0 && rsi_fast <= 60.0 {
+                info!("[Trend Debug] Bearish: price {:.4} < SMA {:.4}, RSI {:.2}", current_price, sma_short, rsi_fast);
+                if signal_type == SignalType::Sell {
+                    confidence += 0.25;
+                } else {
+                    signal_type = SignalType::Sell;
+                    confidence += 0.25;
+                }
+                reasoning.push(format!("Trend following: Price (${:.4}) below SMA (${:.4}), RSI ({:.2}) in bearish range", 
+                                     current_price, sma_short, rsi_fast));
             }
         }
 
