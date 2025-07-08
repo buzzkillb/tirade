@@ -1650,25 +1650,45 @@ async fn index() -> Result<HttpResponse> {
             const reasoningText = Array.isArray(reasoning) ? reasoning.join(' ') : reasoning;
 
             // Check for each trigger type based on the reasoning text
-            if (reasoningText.includes('RSI divergence') || reasoningText.includes('Fast RSI') && reasoningText.includes('Slow RSI')) {
+            if (reasoningText.includes('RSI divergence') || 
+                (reasoningText.includes('Fast RSI') && reasoningText.includes('Slow RSI')) ||
+                reasoningText.includes('RSI divergence: Fast RSI')) {
                 triggers.rsiDivergence = true;
             }
-            if (reasoningText.includes('uptrend') || reasoningText.includes('downtrend') || reasoningText.includes('SMA ratio')) {
+            if (reasoningText.includes('uptrend') || 
+                reasoningText.includes('downtrend') || 
+                reasoningText.includes('SMA ratio') ||
+                reasoningText.includes('Moving average crossover')) {
                 triggers.movingAverage = true;
             }
-            if (reasoningText.includes('Volatility breakout') || reasoningText.includes('volatility') && reasoningText.includes('momentum')) {
+            if (reasoningText.includes('Volatility breakout') || 
+                (reasoningText.includes('volatility') && reasoningText.includes('momentum')) ||
+                reasoningText.includes('volatility breakout')) {
                 triggers.volatilityBreakout = true;
             }
-            if (reasoningText.includes('Mean reversion') || reasoningText.includes('Extreme oversold') || reasoningText.includes('Extreme overbought')) {
+            if (reasoningText.includes('Mean reversion') || 
+                reasoningText.includes('Extreme oversold') || 
+                reasoningText.includes('Extreme overbought') ||
+                reasoningText.includes('Mean reversion: Extreme oversold')) {
                 triggers.meanReversion = true;
             }
-            if (reasoningText.includes('RSI overbought') || reasoningText.includes('RSI oversold')) {
+            if (reasoningText.includes('RSI overbought') || 
+                reasoningText.includes('RSI oversold') ||
+                reasoningText.includes('RSI oversold: RSI') ||
+                reasoningText.includes('RSI overbought: RSI')) {
                 triggers.rsiThreshold = true;
             }
-            if (reasoningText.includes('Momentum confirmation') || reasoningText.includes('price increase') || reasoningText.includes('price decrease')) {
+            if (reasoningText.includes('Momentum confirmation') || 
+                reasoningText.includes('price increase') || 
+                reasoningText.includes('price decrease') ||
+                reasoningText.includes('momentum confirmation')) {
                 triggers.momentumConfirmation = true;
             }
-            if (reasoningText.includes('Trend following') || reasoningText.includes('above SMA') || reasoningText.includes('below SMA')) {
+            if (reasoningText.includes('Trend following') || 
+                reasoningText.includes('above SMA') || 
+                reasoningText.includes('below SMA') ||
+                reasoningText.includes('Enhanced trend following') ||
+                reasoningText.includes('below SMA') && reasoningText.includes('RSI') && reasoningText.includes('bearish range')) {
                 triggers.trendFollowing = true;
             }
 

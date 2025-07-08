@@ -16,6 +16,18 @@ pub struct DynamicThresholds {
     pub stop_loss: f64,
     pub momentum_threshold: f64,
     pub volatility_multiplier: f64,
+    pub market_regime: MarketRegime,
+    pub trend_strength: f64,
+    pub support_level: Option<f64>,
+    pub resistance_level: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub enum MarketRegime {
+    Trending,
+    Ranging,
+    Volatile,
+    Consolidating,
 }
 
 impl TradingStrategy {
@@ -30,17 +42,26 @@ impl TradingStrategy {
         let current_price = indicators.current_price;
         let timestamp = indicators.timestamp;
 
-        // Calculate our custom indicators
-        let custom_indicators = self.calculate_custom_indicators(prices);
+        // Use different timeframes for analysis
+        let short_term_prices = self.get_recent_prices(prices, 24 * 3600); // 24 hours
+        let medium_term_prices = self.get_recent_prices(prices, 7 * 24 * 3600); // 7 days
+        let long_term_prices = self.get_recent_prices(prices, 30 * 24 * 3600); // 30 days
+
+        // Calculate indicators for different timeframes
+        let short_term_indicators = self.calculate_custom_indicators(&short_term_prices);
+        let medium_term_indicators = self.calculate_custom_indicators(&medium_term_prices);
+        let long_term_indicators = self.calculate_custom_indicators(&long_term_prices);
         
-        // Calculate dynamic thresholds based on market conditions
-        let dynamic_thresholds = self.calculate_dynamic_thresholds(prices, &custom_indicators);
+        // Calculate dynamic thresholds using medium-term data for stability
+        let dynamic_thresholds = self.calculate_dynamic_thresholds(&medium_term_prices, &medium_term_indicators);
         
-        // Generate trading signal with dynamic thresholds
+        // Generate trading signal with multi-timeframe analysis
         let signal = self.generate_signal(
             current_price,
             timestamp,
-            &custom_indicators,
+            &short_term_indicators,
+            &medium_term_indicators,
+            &long_term_indicators,
             indicators,
             &dynamic_thresholds,
         );
@@ -49,55 +70,45 @@ impl TradingStrategy {
         signal
     }
 
-    fn calculate_dynamic_thresholds(&self, _prices: &[PriceFeed], indicators: &TradingIndicators) -> DynamicThresholds {
+    fn calculate_dynamic_thresholds(&self, prices: &[PriceFeed], indicators: &TradingIndicators) -> DynamicThresholds {
         let volatility = indicators.volatility.unwrap_or(0.02);
-        let _price_momentum = indicators.price_momentum.unwrap_or(0.0);
+        let price_momentum = indicators.price_momentum.unwrap_or(0.0);
         
-        // Base thresholds (less conservative for more active trading)
-        let base_rsi_oversold = 35.0;
-        let base_rsi_overbought = 65.0;
-        let base_take_profit = 0.03; // 3%
-        let base_stop_loss = 0.02;   // 2%
-        let base_momentum_threshold = 0.005; // 0.5%
+        // Enhanced market analysis using price data only
+        let (market_regime, trend_strength) = self.analyze_market_regime(prices, indicators);
+        let (support_level, resistance_level) = self.calculate_support_resistance(prices);
         
-        // Adjust based on volatility
+        // Base thresholds (adaptive based on market regime)
+        let (base_rsi_oversold, base_rsi_overbought, base_take_profit, base_stop_loss, base_momentum_threshold) = 
+            match market_regime {
+                MarketRegime::Trending => (30.0, 70.0, 0.04, 0.025, 0.003), // More aggressive in trends
+                MarketRegime::Ranging => (35.0, 65.0, 0.025, 0.015, 0.004), // Conservative in ranges
+                MarketRegime::Volatile => (25.0, 75.0, 0.05, 0.03, 0.006),  // Wide thresholds in volatility
+                MarketRegime::Consolidating => (40.0, 60.0, 0.02, 0.012, 0.002), // Tight in consolidation
+            };
+        
+        // Adjust based on volatility and trend strength
         let volatility_multiplier = if volatility > 0.05 {
-            // High volatility - wider thresholds
-            1.5
+            1.3 + (trend_strength * 0.2) // Higher multiplier in strong trends
         } else if volatility < 0.01 {
-            // Low volatility - tighter thresholds
-            0.7
+            0.8 - (trend_strength * 0.1) // Lower multiplier in weak trends
         } else {
-            // Normal volatility
-            1.0
+            1.0 + (trend_strength * 0.1) // Normal with trend adjustment
         };
         
-        // Adjust RSI thresholds based on volatility (less aggressive adjustments)
-        let rsi_oversold = if volatility > 0.05 {
-            base_rsi_oversold + 2.0 // Less aggressive in high volatility
-        } else if volatility < 0.01 {
-            base_rsi_oversold - 2.0 // Less aggressive in low volatility
-        } else {
-            base_rsi_oversold
-        };
+        // Adjust RSI thresholds based on market regime and volatility
+        let rsi_oversold = base_rsi_oversold + (volatility * 100.0 * 0.5) - (trend_strength * 5.0);
+        let rsi_overbought = base_rsi_overbought - (volatility * 100.0 * 0.5) + (trend_strength * 5.0);
         
-        let rsi_overbought = if volatility > 0.05 {
-            base_rsi_overbought - 2.0 // Less aggressive in high volatility
-        } else if volatility < 0.01 {
-            base_rsi_overbought + 2.0 // Less aggressive in low volatility
-        } else {
-            base_rsi_overbought
-        };
-        
-        // Adjust take profit and stop loss based on volatility
+        // Adjust take profit and stop loss based on volatility and support/resistance
         let take_profit = base_take_profit * volatility_multiplier;
         let stop_loss = base_stop_loss * volatility_multiplier;
         
-        // Adjust momentum threshold based on volatility
+        // Adjust momentum threshold based on market conditions
         let momentum_threshold = base_momentum_threshold * volatility_multiplier;
         
-        info!("📊 Dynamic Thresholds - Volatility: {:.3}%, RSI Oversold: {:.1}, RSI Overbought: {:.1}, Take Profit: {:.2}%, Stop Loss: {:.2}%", 
-              volatility * 100.0, rsi_oversold, rsi_overbought, take_profit * 100.0, stop_loss * 100.0);
+        info!("📊 Dynamic Thresholds - Regime: {:?}, Trend Strength: {:.2}, Volatility: {:.3}%, RSI Oversold: {:.1}, RSI Overbought: {:.1}, Take Profit: {:.2}%, Stop Loss: {:.2}%", 
+              market_regime, trend_strength, volatility * 100.0, rsi_oversold, rsi_overbought, take_profit * 100.0, stop_loss * 100.0);
         
         DynamicThresholds {
             rsi_oversold,
@@ -106,6 +117,10 @@ impl TradingStrategy {
             stop_loss,
             momentum_threshold,
             volatility_multiplier,
+            market_regime,
+            trend_strength,
+            support_level,
+            resistance_level,
         }
     }
 
@@ -162,7 +177,9 @@ impl TradingStrategy {
         &self,
         current_price: f64,
         timestamp: DateTime<Utc>,
-        indicators: &TradingIndicators,
+        short_term_indicators: &TradingIndicators,
+        medium_term_indicators: &TradingIndicators,
+        long_term_indicators: &TradingIndicators,
         _db_indicators: &crate::models::TechnicalIndicators,
         dynamic_thresholds: &DynamicThresholds,
     ) -> TradingSignal {
@@ -170,12 +187,14 @@ impl TradingStrategy {
         let mut reasoning = Vec::new();
         let mut signal_type = SignalType::Hold;
 
-        // Debug: Log the indicator values
-        info!("🔍 Strategy Debug - RSI Fast: {:?}, RSI Slow: {:?}, SMA Short: {:?}, SMA Long: {:?}, Volatility: {:?}", 
-              indicators.rsi_fast, indicators.rsi_slow, indicators.sma_short, indicators.sma_long, indicators.volatility);
+        // Debug: Log the indicator values for different timeframes
+        info!("🔍 Strategy Debug - Short-term RSI: {:?}, Medium-term RSI: {:?}, Long-term RSI: {:?}", 
+              short_term_indicators.rsi_fast, medium_term_indicators.rsi_fast, long_term_indicators.rsi_fast);
+        info!("🔍 Strategy Debug - Short-term SMA: {:?}, Medium-term SMA: {:?}, Long-term SMA: {:?}", 
+              short_term_indicators.sma_short, medium_term_indicators.sma_short, long_term_indicators.sma_short);
 
         // Strategy 1: RSI Divergence Signal (with dynamic thresholds)
-        if let (Some(rsi_fast), Some(rsi_slow)) = (indicators.rsi_fast, indicators.rsi_slow) {
+        if let (Some(rsi_fast), Some(rsi_slow)) = (short_term_indicators.rsi_fast, short_term_indicators.rsi_slow) {
             // Buy signal: Fast RSI crosses above slow RSI from oversold
             if rsi_fast > rsi_slow && rsi_fast < dynamic_thresholds.rsi_oversold + 10.0 && rsi_slow < dynamic_thresholds.rsi_oversold + 5.0 {
                 signal_type = SignalType::Buy;
@@ -194,7 +213,7 @@ impl TradingStrategy {
         }
 
         // Strategy 2: Moving Average Crossover
-        if let (Some(sma_short), Some(sma_long)) = (indicators.sma_short, indicators.sma_long) {
+        if let (Some(sma_short), Some(sma_long)) = (short_term_indicators.sma_short, short_term_indicators.sma_long) {
             let ma_ratio = sma_short / sma_long;
             
             // Strong uptrend
@@ -221,13 +240,13 @@ impl TradingStrategy {
         }
 
         // Strategy 3: Volatility Breakout (with dynamic thresholds)
-        if let Some(volatility) = indicators.volatility {
+        if let Some(volatility) = short_term_indicators.volatility {
             let avg_volatility = 0.02; // 2% average volatility
             let volatility_threshold = avg_volatility * dynamic_thresholds.volatility_multiplier;
             
             if volatility > volatility_threshold {
                 // High volatility - look for momentum continuation
-                if indicators.price_momentum.unwrap_or(0.0) > dynamic_thresholds.momentum_threshold {
+                if short_term_indicators.price_momentum.unwrap_or(0.0) > dynamic_thresholds.momentum_threshold {
                     if signal_type == SignalType::Buy {
                         confidence += 0.15;
                     } else {
@@ -236,7 +255,7 @@ impl TradingStrategy {
                     }
                     reasoning.push(format!("Volatility breakout: {:.3}% volatility (threshold: {:.3}%) with positive momentum", 
                                          volatility * 100.0, volatility_threshold * 100.0));
-                } else if indicators.price_momentum.unwrap_or(0.0) < -dynamic_thresholds.momentum_threshold {
+                } else if short_term_indicators.price_momentum.unwrap_or(0.0) < -dynamic_thresholds.momentum_threshold {
                     if signal_type == SignalType::Sell {
                         confidence += 0.15;
                     } else {
@@ -250,7 +269,7 @@ impl TradingStrategy {
         }
 
         // Strategy 4: Mean Reversion (with dynamic thresholds)
-        if let Some(rsi_fast) = indicators.rsi_fast {
+        if let Some(rsi_fast) = short_term_indicators.rsi_fast {
             if rsi_fast < dynamic_thresholds.rsi_oversold - 10.0 && signal_type == SignalType::Hold {
                 signal_type = SignalType::Buy;
                 confidence += 0.25;
@@ -265,7 +284,7 @@ impl TradingStrategy {
         }
 
         // Strategy 5: Simple RSI Overbought/Oversold (should trigger more easily)
-        if let Some(rsi_fast) = indicators.rsi_fast {
+        if let Some(rsi_fast) = short_term_indicators.rsi_fast {
             if rsi_fast > dynamic_thresholds.rsi_overbought && signal_type == SignalType::Hold {
                 signal_type = SignalType::Sell;
                 confidence += 0.35;
@@ -280,44 +299,153 @@ impl TradingStrategy {
         }
 
         // Strategy 6: Price Momentum Confirmation (with dynamic thresholds)
-        if indicators.price_change_percent.abs() > dynamic_thresholds.momentum_threshold {
-            if indicators.price_change_percent > dynamic_thresholds.momentum_threshold && signal_type == SignalType::Buy {
+        if short_term_indicators.price_change_percent.abs() > dynamic_thresholds.momentum_threshold {
+            if short_term_indicators.price_change_percent > dynamic_thresholds.momentum_threshold && signal_type == SignalType::Buy {
                 confidence += 0.1;
                 reasoning.push(format!("Momentum confirmation: {:.2}% price increase (threshold: {:.2}%)", 
-                                     indicators.price_change_percent * 100.0, dynamic_thresholds.momentum_threshold * 100.0));
-            } else if indicators.price_change_percent < -dynamic_thresholds.momentum_threshold && signal_type == SignalType::Sell {
+                                     short_term_indicators.price_change_percent * 100.0, dynamic_thresholds.momentum_threshold * 100.0));
+            } else if short_term_indicators.price_change_percent < -dynamic_thresholds.momentum_threshold && signal_type == SignalType::Sell {
                 confidence += 0.1;
                 reasoning.push(format!("Momentum confirmation: {:.2}% price decrease (threshold: {:.2}%)", 
-                                     indicators.price_change_percent * 100.0, dynamic_thresholds.momentum_threshold * 100.0));
+                                     short_term_indicators.price_change_percent * 100.0, dynamic_thresholds.momentum_threshold * 100.0));
             }
         }
 
-        // Strategy 7: Trend Following (should trigger with current conditions)
-        if let (Some(sma_short), Some(rsi_fast)) = (indicators.sma_short, indicators.rsi_fast) {
-            // Bullish trend: Price above SMA and RSI in bullish territory (40-70)
+        // Strategy 7: Enhanced Trend Following with Market Regime
+        if let (Some(sma_short), Some(rsi_fast)) = (short_term_indicators.sma_short, short_term_indicators.rsi_fast) {
+            let base_confidence = match dynamic_thresholds.market_regime {
+                MarketRegime::Trending => 0.35, // Higher confidence in trending markets
+                MarketRegime::Ranging => 0.20,  // Lower confidence in ranging markets
+                MarketRegime::Volatile => 0.30, // Medium confidence in volatile markets
+                MarketRegime::Consolidating => 0.15, // Low confidence in consolidation
+            };
+            
+            // Bullish trend: Price above SMA and RSI in bullish territory
             if current_price > sma_short && rsi_fast >= 40.0 && rsi_fast <= 70.0 {
-                info!("[Trend Debug] Bullish: price {:.4} > SMA {:.4}, RSI {:.2}", current_price, sma_short, rsi_fast);
+                info!("[Trend Debug] Bullish: price {:.4} > SMA {:.4}, RSI {:.2}, Regime: {:?}", 
+                      current_price, sma_short, rsi_fast, dynamic_thresholds.market_regime);
+                
+                let adjusted_confidence = base_confidence * (1.0 + dynamic_thresholds.trend_strength);
+                
                 if signal_type == SignalType::Buy {
-                    confidence += 0.25;
+                    confidence += adjusted_confidence;
                 } else {
                     signal_type = SignalType::Buy;
-                    confidence += 0.25;
+                    confidence += adjusted_confidence;
                 }
-                reasoning.push(format!("Trend following: Price (${:.4}) above SMA (${:.4}), RSI ({:.2}) in bullish range", 
-                                     current_price, sma_short, rsi_fast));
+                reasoning.push(format!("Enhanced trend following: Price (${:.4}) above SMA (${:.4}), RSI ({:.2}) in bullish range, Regime: {:?}, Trend Strength: {:.2}", 
+                                     current_price, sma_short, rsi_fast, dynamic_thresholds.market_regime, dynamic_thresholds.trend_strength));
             }
             
-            // Bearish trend: Price below SMA and RSI in bearish territory (30-60)
+            // Bearish trend: Price below SMA and RSI in bearish territory
             if current_price < sma_short && rsi_fast >= 30.0 && rsi_fast <= 60.0 {
-                info!("[Trend Debug] Bearish: price {:.4} < SMA {:.4}, RSI {:.2}", current_price, sma_short, rsi_fast);
+                info!("[Trend Debug] Bearish: price {:.4} < SMA {:.4}, RSI {:.2}, Regime: {:?}", 
+                      current_price, sma_short, rsi_fast, dynamic_thresholds.market_regime);
+                
+                let adjusted_confidence = base_confidence * (1.0 + dynamic_thresholds.trend_strength);
+                
                 if signal_type == SignalType::Sell {
-                    confidence += 0.25;
+                    confidence += adjusted_confidence;
                 } else {
                     signal_type = SignalType::Sell;
-                    confidence += 0.25;
+                    confidence += adjusted_confidence;
                 }
-                reasoning.push(format!("Trend following: Price (${:.4}) below SMA (${:.4}), RSI ({:.2}) in bearish range", 
-                                     current_price, sma_short, rsi_fast));
+                reasoning.push(format!("Enhanced trend following: Price (${:.4}) below SMA (${:.4}), RSI ({:.2}) in bearish range, Regime: {:?}, Trend Strength: {:.2}", 
+                                     current_price, sma_short, rsi_fast, dynamic_thresholds.market_regime, dynamic_thresholds.trend_strength));
+            }
+        }
+
+        // Strategy 8: Support/Resistance Breakout
+        if let (Some(support), Some(resistance)) = (dynamic_thresholds.support_level, dynamic_thresholds.resistance_level) {
+            let breakout_threshold = 0.002; // 0.2% breakout threshold
+            
+            // Breakout above resistance
+            if current_price > resistance * (1.0 + breakout_threshold) && signal_type == SignalType::Hold {
+                signal_type = SignalType::Buy;
+                confidence += 0.30;
+                reasoning.push(format!("Resistance breakout: Price (${:.4}) above resistance (${:.4})", 
+                                     current_price, resistance));
+            }
+            
+            // Breakdown below support
+            if current_price < support * (1.0 - breakout_threshold) && signal_type == SignalType::Hold {
+                signal_type = SignalType::Sell;
+                confidence += 0.30;
+                reasoning.push(format!("Support breakdown: Price (${:.4}) below support (${:.4})", 
+                                     current_price, support));
+            }
+        }
+
+        // Strategy 9: Mean Reversion at Support/Resistance
+        if let (Some(support), Some(resistance)) = (dynamic_thresholds.support_level, dynamic_thresholds.resistance_level) {
+            let mean_reversion_threshold = 0.005; // 0.5% from level
+            
+            // Bounce from support
+            if current_price > support && current_price < support * (1.0 + mean_reversion_threshold) && 
+               short_term_indicators.price_change_percent > 0.0 && signal_type == SignalType::Hold {
+                signal_type = SignalType::Buy;
+                confidence += 0.25;
+                reasoning.push(format!("Support bounce: Price (${:.4}) near support (${:.4}) with positive momentum", 
+                                     current_price, support));
+            }
+            
+            // Rejection from resistance
+            if current_price < resistance && current_price > resistance * (1.0 - mean_reversion_threshold) && 
+               short_term_indicators.price_change_percent < 0.0 && signal_type == SignalType::Hold {
+                signal_type = SignalType::Sell;
+                confidence += 0.25;
+                reasoning.push(format!("Resistance rejection: Price (${:.4}) near resistance (${:.4}) with negative momentum", 
+                                     current_price, resistance));
+            }
+        }
+
+        // Strategy 10: Multi-timeframe Trend Alignment
+        if let (Some(short_sma), Some(medium_sma), Some(long_sma)) = 
+            (short_term_indicators.sma_short, medium_term_indicators.sma_short, long_term_indicators.sma_short) {
+            
+            // All timeframes showing bullish alignment
+            if current_price > short_sma && short_sma > medium_sma && medium_sma > long_sma {
+                if signal_type == SignalType::Buy {
+                    confidence += 0.20;
+                } else {
+                    signal_type = SignalType::Buy;
+                    confidence += 0.20;
+                }
+                reasoning.push(format!("Multi-timeframe bullish alignment: Price > Short SMA ({:.4}) > Medium SMA ({:.4}) > Long SMA ({:.4})", 
+                                     short_sma, medium_sma, long_sma));
+            }
+            
+            // All timeframes showing bearish alignment
+            if current_price < short_sma && short_sma < medium_sma && medium_sma < long_sma {
+                if signal_type == SignalType::Sell {
+                    confidence += 0.20;
+                } else {
+                    signal_type = SignalType::Sell;
+                    confidence += 0.20;
+                }
+                reasoning.push(format!("Multi-timeframe bearish alignment: Price < Short SMA ({:.4}) < Medium SMA ({:.4}) < Long SMA ({:.4})", 
+                                     short_sma, medium_sma, long_sma));
+            }
+        }
+
+        // Strategy 11: RSI Divergence Across Timeframes
+        if let (Some(short_rsi), Some(medium_rsi), Some(long_rsi)) = 
+            (short_term_indicators.rsi_fast, medium_term_indicators.rsi_fast, long_term_indicators.rsi_fast) {
+            
+            // Bullish divergence: Short-term RSI rising while longer-term RSI is still low
+            if short_rsi > medium_rsi && medium_rsi < 40.0 && short_rsi > 30.0 && signal_type == SignalType::Hold {
+                signal_type = SignalType::Buy;
+                confidence += 0.30;
+                reasoning.push(format!("Multi-timeframe RSI bullish divergence: Short-term RSI ({:.2}) > Medium-term RSI ({:.2}) from oversold", 
+                                     short_rsi, medium_rsi));
+            }
+            
+            // Bearish divergence: Short-term RSI falling while longer-term RSI is still high
+            if short_rsi < medium_rsi && medium_rsi > 60.0 && short_rsi < 70.0 && signal_type == SignalType::Hold {
+                signal_type = SignalType::Sell;
+                confidence += 0.30;
+                reasoning.push(format!("Multi-timeframe RSI bearish divergence: Short-term RSI ({:.2}) < Medium-term RSI ({:.2}) from overbought", 
+                                     short_rsi, medium_rsi));
             }
         }
 
@@ -339,6 +467,108 @@ impl TradingStrategy {
             take_profit: dynamic_thresholds.take_profit,
             stop_loss: dynamic_thresholds.stop_loss,
         }
+    }
+
+    fn analyze_market_regime(&self, prices: &[PriceFeed], indicators: &TradingIndicators) -> (MarketRegime, f64) {
+        if prices.len() < 50 {
+            return (MarketRegime::Consolidating, 0.0);
+        }
+
+        let price_values: Vec<f64> = prices.iter().map(|p| p.price).collect();
+        
+        // Calculate trend strength using linear regression
+        let trend_strength = self.calculate_trend_strength(&price_values);
+        
+        // Calculate price range and volatility
+        let min_price = price_values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max_price = price_values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let price_range = (max_price - min_price) / min_price;
+        let volatility = indicators.volatility.unwrap_or(0.02);
+        
+        // Determine market regime
+        let regime = if trend_strength > 0.7 && price_range > 0.1 {
+            MarketRegime::Trending
+        } else if volatility > 0.05 {
+            MarketRegime::Volatile
+        } else if price_range < 0.05 {
+            MarketRegime::Consolidating
+        } else {
+            MarketRegime::Ranging
+        };
+        
+        (regime, trend_strength)
+    }
+
+    fn calculate_trend_strength(&self, prices: &[f64]) -> f64 {
+        if prices.len() < 20 {
+            return 0.0;
+        }
+        
+        // Use linear regression to measure trend strength
+        let n = prices.len() as f64;
+        let x_values: Vec<f64> = (0..prices.len()).map(|i| i as f64).collect();
+        
+        let sum_x: f64 = x_values.iter().sum();
+        let sum_y: f64 = prices.iter().sum();
+        let sum_xy: f64 = x_values.iter().zip(prices.iter()).map(|(x, y)| x * y).sum();
+        let sum_x2: f64 = x_values.iter().map(|x| x * x).sum();
+        
+        let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x * sum_x);
+        let mean_price = sum_y / n;
+        
+        // Normalize slope to get trend strength (0-1)
+        let trend_strength = (slope / mean_price).abs().min(1.0);
+        
+        trend_strength
+    }
+
+    fn calculate_support_resistance(&self, prices: &[PriceFeed]) -> (Option<f64>, Option<f64>) {
+        if prices.len() < 20 {
+            return (None, None);
+        }
+        
+        let price_values: Vec<f64> = prices.iter().map(|p| p.price).collect();
+        
+        // Find local minima and maxima
+        let mut support_levels = Vec::new();
+        let mut resistance_levels = Vec::new();
+        
+        for i in 2..price_values.len()-2 {
+            let current = price_values[i];
+            let prev1 = price_values[i-1];
+            let prev2 = price_values[i-2];
+            let next1 = price_values[i+1];
+            let next2 = price_values[i+2];
+            
+            // Local minimum (support)
+            if current < prev1 && current < prev2 && current < next1 && current < next2 {
+                support_levels.push(current);
+            }
+            
+            // Local maximum (resistance)
+            if current > prev1 && current > prev2 && current > next1 && current > next2 {
+                resistance_levels.push(current);
+            }
+        }
+        
+        // Get the most recent support and resistance levels
+        let support = support_levels.last().copied();
+        let resistance = resistance_levels.last().copied();
+        
+        (support, resistance)
+    }
+
+    fn get_recent_prices(&self, prices: &[PriceFeed], seconds_back: u64) -> Vec<PriceFeed> {
+        if prices.is_empty() {
+            return Vec::new();
+        }
+
+        let cutoff_time = prices.last().unwrap().timestamp - chrono::Duration::seconds(seconds_back as i64);
+        
+        prices.iter()
+            .filter(|price| price.timestamp >= cutoff_time)
+            .cloned()
+            .collect()
     }
 
     fn calculate_rsi(&self, prices: &[f64], period: usize) -> Option<f64> {

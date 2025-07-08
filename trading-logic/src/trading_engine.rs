@@ -201,8 +201,9 @@ impl TradingEngine {
     }
 
     async fn fetch_price_history(&self) -> Result<Vec<PriceFeed>> {
+        // Fetch 30 days of data for multi-timeframe analysis
         let url = format!(
-            "{}/prices/{}/history?hours=24",
+            "{}/prices/{}/history?hours=720", // 30 days = 720 hours
             self.config.database_url,
             urlencoding::encode(&self.config.trading_pair)
         );
@@ -211,6 +212,7 @@ impl TradingEngine {
         let api_response: crate::models::ApiResponse<Vec<PriceFeed>> = response.json().await?;
 
         if api_response.success {
+            info!("📊 Fetched {} price records for multi-timeframe analysis", api_response.data.len());
             Ok(api_response.data)
         } else {
             Err(anyhow!("Failed to fetch price history: {:?}", api_response.message))
