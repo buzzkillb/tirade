@@ -294,7 +294,7 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
         .await
     {
         if let Ok(count_response) = response.json::<serde_json::Value>().await {
-            if let Some(count) = count_response["count"].as_i64() {
+            if let Some(count) = count_response["data"]["count"].as_i64() {
                 dashboard_data.system_status.total_signals_today = count;
             }
         }
@@ -322,9 +322,31 @@ async fn index() -> Result<HttpResponse> {
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #000000 0%, #0a0a0a 25%, #1a1a1a 50%, #0a0a0a 75%, #000000 100%);
+            background: linear-gradient(135deg, 
+                #000000 0%, 
+                #0a0a0a 15%, 
+                #1a0a2e 30%, 
+                #16213e 50%, 
+                #0f3460 70%, 
+                #533483 85%, 
+                #000000 100%);
             color: #ffffff;
             min-height: 100vh;
+            position: relative;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at 20% 80%, rgba(153, 69, 255, 0.15) 0%, transparent 50%),
+                        radial-gradient(circle at 80% 20%, rgba(20, 241, 149, 0.1) 0%, transparent 50%),
+                        radial-gradient(circle at 40% 40%, rgba(153, 69, 255, 0.05) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: -1;
         }
 
         .container {
@@ -347,6 +369,46 @@ async fn index() -> Result<HttpResponse> {
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
+        }
+
+        .sol-logo {
+            display: inline-block;
+            background: linear-gradient(45deg, #9945ff, #14f195, #9945ff);
+            background-size: 200% 200%;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-weight: bold;
+            font-size: 1.2em;
+            text-shadow: 0 0 20px rgba(153, 69, 255, 0.8);
+            animation: solGlow 3s ease-in-out infinite;
+            position: relative;
+        }
+
+        .sol-logo::before {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: -2px;
+            right: -2px;
+            bottom: -2px;
+            background: linear-gradient(45deg, #9945ff, #14f195, #9945ff);
+            background-size: 200% 200%;
+            z-index: -1;
+            border-radius: 8px;
+            opacity: 0.3;
+            animation: solGlow 3s ease-in-out infinite;
+        }
+
+        @keyframes solGlow {
+            0%, 100% {
+                background-position: 0% 50%;
+                filter: brightness(1);
+            }
+            50% {
+                background-position: 100% 50%;
+                filter: brightness(1.2);
+            }
         }
 
         .header p {
@@ -451,6 +513,49 @@ async fn index() -> Result<HttpResponse> {
             height: 400px;
         }
 
+        .chart-legend {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 15px;
+            padding: 10px;
+            background: linear-gradient(145deg, #0a0a0a, #1a1a1a);
+            border-radius: 8px;
+            border: 1px solid #333333;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #ffffff;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 2px solid #0a0a0a;
+            box-shadow: 0 0 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .buy-dot {
+            background: #14f195;
+            box-shadow: 0 0 8px rgba(20, 241, 149, 0.4);
+        }
+
+        .sell-dot {
+            background: #ff6b6b;
+            box-shadow: 0 0 8px rgba(255, 107, 107, 0.4);
+        }
+
+        .hold-dot {
+            background: #9945ff;
+            box-shadow: 0 0 8px rgba(153, 69, 255, 0.4);
+        }
+
         .signal-item {
             padding: 10px;
             margin: 5px 0;
@@ -461,19 +566,71 @@ async fn index() -> Result<HttpResponse> {
         }
 
         .signal-buy { 
-            background: linear-gradient(145deg, #0d2b1a, #1a2e1a); 
+            background: linear-gradient(145deg, #1a0a2e, #16213e, #0f3460); 
             border-left-color: #14f195; 
             border-color: #14f195;
+            box-shadow: 0 0 15px rgba(20, 241, 149, 0.2);
+            position: relative;
+            overflow: hidden;
         }
+
+        .signal-buy::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(45deg, 
+                rgba(20, 241, 149, 0.08) 0%, 
+                rgba(153, 69, 255, 0.03) 50%, 
+                rgba(20, 241, 149, 0.08) 100%);
+            pointer-events: none;
+        }
+
         .signal-sell { 
-            background: linear-gradient(145deg, #2b1a1a, #2e1a1a); 
+            background: linear-gradient(145deg, #1a0a2e, #16213e, #0f3460); 
             border-left-color: #ff6b6b; 
             border-color: #ff6b6b;
+            box-shadow: 0 0 15px rgba(255, 107, 107, 0.2);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .signal-sell::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(45deg, 
+                rgba(255, 107, 107, 0.08) 0%, 
+                rgba(153, 69, 255, 0.03) 50%, 
+                rgba(255, 107, 107, 0.08) 100%);
+            pointer-events: none;
         }
         .signal-hold { 
-            background: linear-gradient(145deg, #2b2b1a, #2e2e1a); 
+            background: linear-gradient(145deg, #0a0514, #0d0f1a, #061220); 
             border-left-color: #9945ff; 
             border-color: #9945ff;
+            box-shadow: 0 0 15px rgba(153, 69, 255, 0.2);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .signal-hold::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(45deg, 
+                rgba(153, 69, 255, 0.08) 0%, 
+                rgba(20, 241, 149, 0.03) 50%, 
+                rgba(153, 69, 255, 0.08) 100%);
+            pointer-events: none;
         }
 
         .refresh-btn {
@@ -517,7 +674,7 @@ async fn index() -> Result<HttpResponse> {
 <body>
     <div class="container">
         <div class="header">
-            <h1>🚀 Tirade Trading Dashboard</h1>
+            <h1>Tirade Trading Dashboard</h1>
             <p>Real-time Solana Trading Bot Monitoring</p>
         </div>
 
@@ -573,6 +730,20 @@ async fn index() -> Result<HttpResponse> {
             <!-- Price Chart -->
             <div class="card price-chart">
                 <h3>📊 Price Chart (24h)</h3>
+                <div class="chart-legend">
+                    <div class="legend-item">
+                        <span class="legend-dot buy-dot"></span>
+                        <span>BUY Signal</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-dot sell-dot"></span>
+                        <span>SELL Signal</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-dot hold-dot"></span>
+                        <span>HOLD Signal</span>
+                    </div>
+                </div>
                 <canvas id="priceChart"></canvas>
             </div>
         </div>
@@ -601,7 +772,7 @@ async fn index() -> Result<HttpResponse> {
                 updateActivePositions(data.active_positions);
                 updateRecentTrades(data.recent_trades);
                 updatePerformanceMetrics(data.performance);
-                updatePriceChart(data.price_history);
+                updatePriceChart(data.price_history, data.latest_signals);
 
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('dashboard').style.display = 'block';
@@ -796,7 +967,7 @@ async fn index() -> Result<HttpResponse> {
             `;
         }
 
-        function updatePriceChart(priceHistory) {
+        function updatePriceChart(priceHistory, signals = []) {
             const ctx = document.getElementById('priceChart').getContext('2d');
             
             if (priceChart) {
@@ -806,6 +977,40 @@ async fn index() -> Result<HttpResponse> {
             const labels = priceHistory.map(p => new Date(p.timestamp));
             const prices = priceHistory.map(p => p.price);
 
+            // Create gradient background
+            const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+            gradient.addColorStop(0, 'rgba(153, 69, 255, 0.3)');
+            gradient.addColorStop(0.5, 'rgba(20, 241, 149, 0.1)');
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0.05)');
+
+            // Create signal-based dot colors
+            const pointColors = priceHistory.map(pricePoint => {
+                const priceTime = new Date(pricePoint.timestamp);
+                
+                // Find the closest signal to this price point (within 5 minutes)
+                const closestSignal = signals.find(signal => {
+                    const signalTime = new Date(signal.timestamp);
+                    const timeDiff = Math.abs(priceTime - signalTime);
+                    return timeDiff <= 5 * 60 * 1000; // 5 minutes in milliseconds
+                });
+
+                if (closestSignal) {
+                    switch (closestSignal.signal_type.toLowerCase()) {
+                        case 'buy':
+                            return '#14f195'; // Green for buy
+                        case 'sell':
+                            return '#ff6b6b'; // Red for sell
+                        case 'hold':
+                            return '#9945ff'; // Purple for hold
+                        default:
+                            return '#9945ff'; // Default purple
+                    }
+                }
+                
+                // Default color for points without signals
+                return '#9945ff';
+            });
+
             priceChart = new Chart(ctx, {
                 type: 'line',
                 data: {
@@ -814,17 +1019,18 @@ async fn index() -> Result<HttpResponse> {
                         label: 'SOL/USDC Price',
                         data: prices,
                         borderColor: '#9945ff',
-                        backgroundColor: 'rgba(153, 69, 255, 0.1)',
+                        backgroundColor: gradient,
                         borderWidth: 3,
                         fill: true,
                         tension: 0.4,
-                        pointBackgroundColor: '#9945ff',
-                        pointBorderColor: '#1a1a1a',
+                        pointBackgroundColor: pointColors,
+                        pointBorderColor: '#0a0a0a',
                         pointBorderWidth: 2,
-                        pointRadius: 3,
-                        pointHoverRadius: 6,
+                        pointRadius: 4,
+                        pointHoverRadius: 8,
                         pointHoverBackgroundColor: '#14f195',
-                        pointHoverBorderColor: '#1a1a1a'
+                        pointHoverBorderColor: '#0a0a0a',
+                        pointHoverBorderWidth: 3
                     }]
                 },
                 options: {
@@ -833,6 +1039,30 @@ async fn index() -> Result<HttpResponse> {
                     plugins: {
                         legend: {
                             display: false
+                        },
+                        tooltip: {
+                            callbacks: {
+                                afterBody: function(context) {
+                                    const dataIndex = context[0].dataIndex;
+                                    const priceTime = new Date(priceHistory[dataIndex].timestamp);
+                                    
+                                    // Find signal info for this point
+                                    const signal = signals.find(s => {
+                                        const signalTime = new Date(s.timestamp);
+                                        const timeDiff = Math.abs(priceTime - signalTime);
+                                        return timeDiff <= 5 * 60 * 1000;
+                                    });
+                                    
+                                    if (signal) {
+                                        return [
+                                            `Signal: ${signal.signal_type.toUpperCase()}`,
+                                            `Confidence: ${(signal.confidence * 100).toFixed(1)}%`,
+                                            `Reason: ${signal.reasoning}`
+                                        ];
+                                    }
+                                    return '';
+                                }
+                            }
                         }
                     },
                     scales: {
@@ -842,19 +1072,29 @@ async fn index() -> Result<HttpResponse> {
                                 unit: 'hour'
                             },
                             grid: {
-                                color: 'rgba(255, 255, 255, 0.05)'
+                                color: 'rgba(153, 69, 255, 0.1)',
+                                borderColor: 'rgba(153, 69, 255, 0.2)'
                             },
                             ticks: {
-                                color: '#888888'
+                                color: '#9945ff',
+                                font: {
+                                    size: 12,
+                                    weight: '500'
+                                }
                             }
                         },
                         y: {
                             beginAtZero: false,
                             grid: {
-                                color: 'rgba(255, 255, 255, 0.05)'
+                                color: 'rgba(20, 241, 149, 0.1)',
+                                borderColor: 'rgba(20, 241, 149, 0.2)'
                             },
                             ticks: {
-                                color: '#888888'
+                                color: '#14f195',
+                                font: {
+                                    size: 12,
+                                    weight: '500'
+                                }
                             }
                         }
                     }
