@@ -257,9 +257,35 @@ The Tirade dashboard provides a comprehensive web interface for monitoring your 
 - Mobile-friendly interface optimized for extended viewing
 
 ### Access
-- **URL**: http://localhost:3000
+- **Local Access**: http://localhost:3000
+- **External Access**: http://YOUR_VM_PUBLIC_IP:3000 (replace with your actual VM IP)
 - **Auto-refresh**: Every 30 seconds
 - **No authentication required** (local development)
+
+### External Access Configuration
+The dashboard is configured to bind to `0.0.0.0:3000` by default, making it accessible from external machines:
+
+#### **Environment Variables**
+- `DASHBOARD_BIND`: Bind address (default: `0.0.0.0`)
+- `DASHBOARD_PORT`: Port number (default: `3000`)
+- `DATABASE_URL`: Database service URL (default: `http://localhost:8080`)
+
+#### **Access Examples**
+```bash
+# Default (external access enabled)
+DATABASE_URL="http://localhost:8080" cargo run
+
+# Custom port
+DATABASE_URL="http://localhost:8080" DASHBOARD_PORT="8080" cargo run
+
+# Localhost only
+DATABASE_URL="http://localhost:8080" DASHBOARD_BIND="127.0.0.1" cargo run
+```
+
+#### **Network Requirements**
+- **Azure VM**: Ensure port 3000 is open in Network Security Group
+- **Firewall**: Configure firewall to allow inbound traffic on port 3000
+- **Local Network**: Access via local IP if on same network
 
 ### Technical Stack
 - **Backend**: Rust with Actix-web
@@ -293,9 +319,20 @@ The trading logic implements a multi-strategy approach:
 
 ## Recent Improvements
 
+### Dashboard Enhancements (Latest)
+- **External Access**: Dashboard now binds to `0.0.0.0:3000` by default for external access
+- **Technical Indicators Fix**: Resolved API parsing issues for RSI, SMA, and volatility display
+- **Confidence Display Fix**: Corrected percentage calculation for trading signal confidence
+- **Enhanced Logging**: Added external access URL display during startup
+- **Configurable Binding**: Added environment variables for flexible network configuration
+
 ### v3.1 Features (Current)
+- ✅ **External Access Configuration**: Dashboard accessible from external machines via `0.0.0.0:3000`
+- ✅ **Configurable Network Binding**: Environment variables for bind address and port
 - ✅ **Ultra-Dark Solana Theme**: Beautiful dark theme inspired by Solana.com
 - ✅ **Enhanced Visual Design**: Professional styling with purple and green accents
+- ✅ **Fixed Technical Indicators**: Proper API parsing and display of RSI, SMA, and volatility data
+- ✅ **Fixed Confidence Display**: Correct percentage display for trading signal confidence
 - ✅ **Complete Trading Execution**: Real Solana trades via Jupiter integration
 - ✅ **Dry Run Mode**: Safe testing without actual trades
 - ✅ **Balance Tracking**: Real-time wallet balance monitoring

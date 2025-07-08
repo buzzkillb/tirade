@@ -170,15 +170,36 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
 
     // Fetch latest indicators
     if let Ok(response) = client
-        .get(&format!("{}/indicators/SOL%2FUSDC/latest", state.database_url))
+        .get(&format!("{}/indicators/SOL%2FUSDC", state.database_url))
         .send()
         .await
     {
         if let Ok(api_response) = response.json::<serde_json::Value>().await {
             if let Some(indicator_data) = api_response["data"].as_object() {
-                if let Ok(indicator) = serde_json::from_value::<TechnicalIndicator>(serde_json::Value::Object(indicator_data.clone())) {
-                    dashboard_data.latest_indicators = vec![indicator];
+                // Create a TechnicalIndicator with the available data
+                let mut indicator = TechnicalIndicator {
+                    id: "latest".to_string(),
+                    pair: indicator_data["pair"].as_str().unwrap_or("SOL/USDC").to_string(),
+                    timestamp: chrono::Utc::now(),
+                    sma_20: indicator_data["sma_20"].as_f64(),
+                    sma_50: indicator_data["sma_50"].as_f64(),
+                    sma_200: indicator_data["sma_200"].as_f64(),
+                    rsi_14: indicator_data["rsi_14"].as_f64(),
+                    price_change_24h: indicator_data["price_change_24h"].as_f64(),
+                    price_change_percent_24h: indicator_data["price_change_percent_24h"].as_f64(),
+                    volatility_24h: indicator_data["volatility_24h"].as_f64(),
+                    current_price: indicator_data["current_price"].as_f64().unwrap_or(0.0),
+                    created_at: chrono::Utc::now(),
+                };
+                
+                // Parse timestamp if available
+                if let Some(timestamp_str) = indicator_data["timestamp"].as_str() {
+                    if let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(timestamp_str) {
+                        indicator.timestamp = timestamp.with_timezone(&chrono::Utc);
+                    }
                 }
+                
+                dashboard_data.latest_indicators = vec![indicator];
             }
         }
     }
@@ -694,7 +715,7 @@ async fn index() -> Result<HttpResponse> {
                 
                 return `
                     <div class="signal-item signal-${signalClass}">
-                        <div><strong>${signal.signal_type.toUpperCase()}</strong> - ${signal.confidence.toFixed(1)}% confidence</div>
+                        <div><strong>${signal.signal_type.toUpperCase()}</strong> - ${(signal.confidence * 100).toFixed(1)}% confidence</div>
                         <div>Price: $${signal.price.toFixed(4)}</div>
                         <div>${signal.reasoning}</div>
                         <div><small>${new Date(signal.timestamp).toLocaleString()}</small></div>
@@ -859,9 +880,13 @@ async fn index() -> Result<HttpResponse> {
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let bind_address = std::env::var("DASHBOARD_BIND").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let bind_port = std::env::var("DASHBOARD_PORT").unwrap_or_else(|_| "3000".to_string());
+    let bind_addr = format!("{}:{}", bind_address, bind_port);
     
-    println!("🚀 Starting Tirade Dashboard on http://localhost:3000");
+    println!("🚀 Starting Tirade Dashboard on http://{}", bind_addr);
     println!("📊 Database URL: {}", database_url);
+    println!("🌐 External Access: http://YOUR_VM_PUBLIC_IP:{}", bind_port);
 
     let app_state = web::Data::new(AppState {
         database_url,
@@ -875,7 +900,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/dashboard", web::get().to(get_dashboard_data))
             .service(Files::new("/static", "./static").show_files_listing())
     })
-    .bind("127.0.0.1:3000")?
+    .bind(&bind_addr)?
     .run()
     .await
 } 
