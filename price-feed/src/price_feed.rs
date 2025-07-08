@@ -98,8 +98,8 @@ impl PriceFeedService {
         let config = Config::from_env()?;
         let db_client = DatabaseClient::new(&config);
         
-        // Store with retry logic (3 attempts)
-        db_client.store_price_with_retry("pyth", "SOL/USD", price, 3).await
+        // Store with retry logic (3 attempts) - use SOL/USDC to match dashboard expectations
+        db_client.store_price_with_retry("pyth", "SOL/USDC", price, 3).await
     }
 
     async fn store_jupiter_price(price: f64) -> Result<()> {

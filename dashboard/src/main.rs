@@ -116,6 +116,15 @@ pub struct DashboardData {
     pub performance: PerformanceMetrics,
     pub price_history: Vec<PriceData>,
     pub market_sentiment: String,
+    pub price_changes: PriceChanges,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PriceChanges {
+    pub change_1h: Option<f64>,
+    pub change_4h: Option<f64>,
+    pub change_12h: Option<f64>,
+    pub change_24h: Option<f64>,
 }
 
 struct AppState {
@@ -155,22 +164,55 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
         },
         price_history: Vec::new(),
         market_sentiment: "Neutral".to_string(),
+        price_changes: PriceChanges {
+            change_1h: None,
+            change_4h: None,
+            change_12h: None,
+            change_24h: None,
+        },
     };
 
-    // Fetch latest prices
+    // Fetch latest prices - try Pyth first (SOL/USD), then fall back to any SOL/USDC source
+    let mut pyth_price: Option<PriceData> = None;
+    
+    // Try to get Pyth price from SOL/USD (what Pyth actually stores)
     if let Ok(response) = client
-        .get(&format!("{}/prices/SOL%2FUSDC/latest", state.database_url))
+        .get(&format!("{}/prices/SOL%2FUSD/latest?source=pyth", state.database_url))
         .send()
         .await
     {
         if let Ok(api_response) = response.json::<serde_json::Value>().await {
             if let Some(price_data) = api_response["data"].as_object() {
                 if let Ok(price) = serde_json::from_value::<PriceData>(serde_json::Value::Object(price_data.clone())) {
-                    dashboard_data.latest_prices = vec![price.clone()];
-                    dashboard_data.system_status.last_price_update = Some(price.timestamp);
-                    // Check if price is recent (within last 5 minutes)
-                    let five_minutes_ago = chrono::Utc::now() - chrono::Duration::minutes(5);
-                    dashboard_data.system_status.price_feed_running = price.timestamp > five_minutes_ago;
+                    pyth_price = Some(price);
+                }
+            }
+        }
+    }
+    
+    // If we have Pyth data, use it; otherwise fall back to any SOL/USDC source
+    if let Some(price) = pyth_price {
+        dashboard_data.latest_prices = vec![price.clone()];
+        dashboard_data.system_status.last_price_update = Some(price.timestamp);
+        // Check if price is recent (within last 5 minutes)
+        let five_minutes_ago = chrono::Utc::now() - chrono::Duration::minutes(5);
+        dashboard_data.system_status.price_feed_running = price.timestamp > five_minutes_ago;
+    } else {
+        // Fall back to any SOL/USDC source (Jupiter, etc.)
+        if let Ok(response) = client
+            .get(&format!("{}/prices/SOL%2FUSDC/latest", state.database_url))
+            .send()
+            .await
+        {
+            if let Ok(api_response) = response.json::<serde_json::Value>().await {
+                if let Some(price_data) = api_response["data"].as_object() {
+                    if let Ok(price) = serde_json::from_value::<PriceData>(serde_json::Value::Object(price_data.clone())) {
+                        dashboard_data.latest_prices = vec![price.clone()];
+                        dashboard_data.system_status.last_price_update = Some(price.timestamp);
+                        // Check if price is recent (within last 5 minutes)
+                        let five_minutes_ago = chrono::Utc::now() - chrono::Duration::minutes(5);
+                        dashboard_data.system_status.price_feed_running = price.timestamp > five_minutes_ago;
+                    }
                 }
             }
         }
@@ -291,16 +333,57 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
         }
     }
 
-    // Fetch price history for chart
+    // Fetch price history for chart (get 48 hours to ensure we have enough data for all time intervals)
     if let Ok(response) = client
-        .get(&format!("{}/prices/SOL%2FUSDC/history?hours=24", state.database_url))
+        .get(&format!("{}/prices/SOL%2FUSDC/history?hours=48", state.database_url))
         .send()
         .await
     {
         if let Ok(api_response) = response.json::<serde_json::Value>().await {
             if let Some(price_history_array) = api_response["data"].as_array() {
                 if let Ok(price_history) = serde_json::from_value::<Vec<PriceData>>(serde_json::Value::Array(price_history_array.clone())) {
-                    dashboard_data.price_history = price_history;
+                    dashboard_data.price_history = price_history.clone();
+                    
+                    // Calculate price changes if we have enough data
+                    if price_history.len() > 0 {
+                        let current_price = price_history[0].price;
+                        let now = chrono::Utc::now();
+                        
+                        // Sort price history by timestamp (newest first) to ensure proper order
+                        let mut sorted_history = price_history.clone();
+                        sorted_history.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                        
+                        // Find prices at different time intervals
+                        let target_1h = now - chrono::Duration::hours(1);
+                        let target_4h = now - chrono::Duration::hours(4);
+                        let target_12h = now - chrono::Duration::hours(12);
+                        let target_24h = now - chrono::Duration::hours(24);
+                        
+                        // Find the closest price to each target time
+                        let price_1h = sorted_history.iter()
+                            .filter(|p| p.timestamp <= target_1h)
+                            .next()
+                            .map(|p| p.price);
+                        let price_4h = sorted_history.iter()
+                            .filter(|p| p.timestamp <= target_4h)
+                            .next()
+                            .map(|p| p.price);
+                        let price_12h = sorted_history.iter()
+                            .filter(|p| p.timestamp <= target_12h)
+                            .next()
+                            .map(|p| p.price);
+                        let price_24h = sorted_history.iter()
+                            .filter(|p| p.timestamp <= target_24h)
+                            .next()
+                            .map(|p| p.price);
+                        
+                        dashboard_data.price_changes = PriceChanges {
+                            change_1h: price_1h.and_then(|p| if p > 0.0 && p != current_price { Some(((current_price - p) / p) * 100.0) } else { None }),
+                            change_4h: price_4h.and_then(|p| if p > 0.0 && p != current_price { Some(((current_price - p) / p) * 100.0) } else { None }),
+                            change_12h: price_12h.and_then(|p| if p > 0.0 && p != current_price { Some(((current_price - p) / p) * 100.0) } else { None }),
+                            change_24h: price_24h.and_then(|p| if p > 0.0 && p != current_price { Some(((current_price - p) / p) * 100.0) } else { None }),
+                        };
+                    }
                 }
             }
         }
@@ -1120,9 +1203,9 @@ async fn index() -> Result<HttpResponse> {
                 });
                 
                 updateSystemStatus(data.system_status);
-                updatePricePerformance(data.latest_prices, data.performance);
+                updatePricePerformance(data.latest_prices, data.performance, data.price_changes);
                 updateTechnicalIndicators(data.latest_indicators);
-                updateLatestSignals(data.latest_signals, data.market_sentiment);
+                updateLatestSignals(data.latest_signals, data.market_sentiment, data.price_changes);
                 updateActivePositions(data.active_positions);
                 updateRecentTrades(data.recent_trades);
                 updatePerformanceMetrics(data.performance);
@@ -1180,12 +1263,34 @@ async fn index() -> Result<HttpResponse> {
             `;
         }
 
-        function updatePricePerformance(prices, performance) {
+        function updatePricePerformance(prices, performance, priceChanges) {
             const latestPrice = prices[0];
             const container = document.getElementById('price-performance');
             
             if (latestPrice) {
-                const priceChange = latestPrice.price_change_percent_24h || 0;
+                // Implement fallback hierarchy for price change display
+                let priceChange = null;
+                let timeLabel = '';
+                
+                // Try 24h first, then fall back to 12h, 4h, 1h
+                if (priceChanges && priceChanges.change_24h !== undefined && priceChanges.change_24h !== null) {
+                    priceChange = priceChanges.change_24h;
+                    timeLabel = '24h';
+                } else if (priceChanges && priceChanges.change_12h !== undefined && priceChanges.change_12h !== null) {
+                    priceChange = priceChanges.change_12h;
+                    timeLabel = '12h';
+                } else if (priceChanges && priceChanges.change_4h !== undefined && priceChanges.change_4h !== null) {
+                    priceChange = priceChanges.change_4h;
+                    timeLabel = '4h';
+                } else if (priceChanges && priceChanges.change_1h !== undefined && priceChanges.change_1h !== null) {
+                    priceChange = priceChanges.change_1h;
+                    timeLabel = '1h';
+                } else {
+                    // Fall back to the old method if no new price changes data
+                    priceChange = latestPrice.price_change_percent_24h || 0;
+                    timeLabel = '24h';
+                }
+                
                 const changeClass = priceChange > 0 ? 'positive' : priceChange < 0 ? 'negative' : 'neutral';
                 const changeSymbol = priceChange > 0 ? '📈' : priceChange < 0 ? '📉' : '➡️';
                 
@@ -1198,7 +1303,7 @@ async fn index() -> Result<HttpResponse> {
                         </span>
                     </div>
                     <div class="metric">
-                        <span>24h Change:</span>
+                        <span>${timeLabel} Change:</span>
                         <span class="metric-value ${changeClass}" id="price-change">${changeSymbol} ${priceChange.toFixed(2)}%</span>
                     </div>
                     <div class="metric">
@@ -1241,7 +1346,7 @@ async fn index() -> Result<HttpResponse> {
             }
         }
 
-        function updateLatestSignals(signals, marketSentiment) {
+        function updateLatestSignals(signals, marketSentiment, priceChanges) {
             const container = document.getElementById('latest-signals');
             const sentimentContainer = document.getElementById('market-sentiment');
             
@@ -1271,10 +1376,37 @@ async fn index() -> Result<HttpResponse> {
                 const isNew = newSignals.some(newSignal => newSignal.id === signal.id);
                 const newClass = isNew ? 'new-signal' : '';
                 
+                // Build price change spans only for available intervals
+                let priceChangeSpans = '';
+                if (priceChanges.change_1h !== undefined && priceChanges.change_1h !== null) {
+                    const cls = priceChanges.change_1h >= 0 ? 'positive' : 'negative';
+                    const sign = priceChanges.change_1h >= 0 ? '+' : '';
+                    priceChangeSpans += `<span class="${cls}">1h: ${sign}${priceChanges.change_1h.toFixed(2)}%</span>`;
+                }
+                if (priceChanges.change_4h !== undefined && priceChanges.change_4h !== null) {
+                    const cls = priceChanges.change_4h >= 0 ? 'positive' : 'negative';
+                    const sign = priceChanges.change_4h >= 0 ? '+' : '';
+                    priceChangeSpans += `<span class="${cls}">4h: ${sign}${priceChanges.change_4h.toFixed(2)}%</span>`;
+                }
+                if (priceChanges.change_12h !== undefined && priceChanges.change_12h !== null) {
+                    const cls = priceChanges.change_12h >= 0 ? 'positive' : 'negative';
+                    const sign = priceChanges.change_12h >= 0 ? '+' : '';
+                    priceChangeSpans += `<span class="${cls}">12h: ${sign}${priceChanges.change_12h.toFixed(2)}%</span>`;
+                }
+                if (priceChanges.change_24h !== undefined && priceChanges.change_24h !== null) {
+                    const cls = priceChanges.change_24h >= 0 ? 'positive' : 'negative';
+                    const sign = priceChanges.change_24h >= 0 ? '+' : '';
+                    priceChangeSpans += `<span class="${cls}">24h: ${sign}${priceChanges.change_24h.toFixed(2)}%</span>`;
+                }
                 return `
                     <div class="signal-item signal-${signalClass} ${newClass}" data-signal-id="${signal.id}">
                         <div><strong>${signal.signal_type.toUpperCase()}</strong> - ${(signal.confidence * 100).toFixed(1)}% confidence</div>
-                        <div>Price: $${signal.price.toFixed(4)}</div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span>Price: $${signal.price.toFixed(4)}</span>
+                            <div style="display: flex; gap: 10px; font-size: 0.8rem;">
+                                ${priceChangeSpans}
+                            </div>
+                        </div>
                         <div>${signal.reasoning}</div>
                         <div><small>${new Date(signal.timestamp).toLocaleString()}</small></div>
                     </div>
@@ -1713,7 +1845,7 @@ async fn index() -> Result<HttpResponse> {
                     fetch('https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT'),
                     fetch('https://api.coinbase.com/v2/prices/SOL-USD/spot'),
                     fetch('/api/dashboard'), // Pyth price from your existing dashboard API
-                    fetch('/api/dashboard') // Jupiter price from your existing dashboard API
+                    fetch('http://localhost:8080/prices/SOL%2FUSDC/latest?source=jupiter') // Jupiter price directly from database
                 ]);
 
                 const prices = {};
@@ -1762,12 +1894,9 @@ async fn index() -> Result<HttpResponse> {
                 if (jupiterResponse.status === 'fulfilled' && jupiterResponse.value.ok) {
                     try {
                         const jupiterData = await jupiterResponse.value.json();
-                        // Jupiter price is in the latest_prices array with source "jupiter"
-                        if (jupiterData.latest_prices && jupiterData.latest_prices.length > 0) {
-                            const jupiterPrice = jupiterData.latest_prices.find(p => p.source === 'jupiter');
-                            if (jupiterPrice && jupiterPrice.price) {
-                                prices.jupiter = parseFloat(jupiterPrice.price);
-                            }
+                        // Jupiter price is directly in the data field
+                        if (jupiterData.data && jupiterData.data.price) {
+                            prices.jupiter = parseFloat(jupiterData.data.price);
                         }
                     } catch (e) {
                         console.log('Jupiter data parse error:', e);
@@ -1799,6 +1928,7 @@ async fn index() -> Result<HttpResponse> {
                 
                 let priceHtml = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">';
                 
+                // Binance - only show if price is available
                 if (prices.binance) {
                     priceHtml += `
                         <div style="background: linear-gradient(145deg, #0a0a0a, #1a1a1a); border: 1px solid #f7931a; border-radius: 10px; padding: 15px; text-align: center;">
@@ -1808,7 +1938,7 @@ async fn index() -> Result<HttpResponse> {
                         </div>
                     `;
                 }
-                
+                // Coinbase - only show if price is available
                 if (prices.coinbase) {
                     priceHtml += `
                         <div style="background: linear-gradient(145deg, #0a0a0a, #1a1a1a); border: 1px solid #0052ff; border-radius: 10px; padding: 15px; text-align: center;">
@@ -1818,7 +1948,7 @@ async fn index() -> Result<HttpResponse> {
                         </div>
                     `;
                 }
-                
+                // Pyth - only show if price is available
                 if (prices.pyth) {
                     priceHtml += `
                         <div style="background: linear-gradient(145deg, #0a0a0a, #1a1a1a); border: 1px solid #9945ff; border-radius: 10px; padding: 15px; text-align: center;">
@@ -1828,7 +1958,7 @@ async fn index() -> Result<HttpResponse> {
                         </div>
                     `;
                 }
-                
+                // JUP - only show if price is available
                 if (prices.jupiter) {
                     priceHtml += `
                         <div style="background: linear-gradient(145deg, #0a0a0a, #1a1a1a); border: 1px solid #ff6b35; border-radius: 10px; padding: 15px; text-align: center;">
@@ -1841,13 +1971,7 @@ async fn index() -> Result<HttpResponse> {
                 
                 priceHtml += '</div>';
                 
-                // Add last updated timestamp
-                priceHtml += `
-                    <div style="text-align: center; margin-top: 15px; color: #888; font-size: 0.8rem;">
-                        Last updated: ${new Date().toLocaleTimeString()}
-                        <span style="color: #14f195; margin-left: 8px; animation: pulse 1s ease-in-out infinite;">●</span>
-                    </div>
-                `;
+
                 
                 exchangeElement.innerHTML = priceHtml;
             }
