@@ -174,8 +174,12 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
         .send()
         .await
     {
-        if let Ok(indicators) = response.json::<Vec<TechnicalIndicator>>().await {
-            dashboard_data.latest_indicators = indicators;
+        if let Ok(api_response) = response.json::<serde_json::Value>().await {
+            if let Some(indicator_data) = api_response["data"].as_object() {
+                if let Ok(indicator) = serde_json::from_value::<TechnicalIndicator>(serde_json::Value::Object(indicator_data.clone())) {
+                    dashboard_data.latest_indicators = vec![indicator];
+                }
+            }
         }
     }
 
@@ -206,9 +210,13 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
         .send()
         .await
     {
-        if let Ok(positions) = response.json::<Vec<Position>>().await {
-            dashboard_data.active_positions = positions;
-            dashboard_data.system_status.active_positions = dashboard_data.active_positions.len() as i64;
+        if let Ok(api_response) = response.json::<serde_json::Value>().await {
+            if let Some(positions_array) = api_response["data"].as_array() {
+                if let Ok(positions) = serde_json::from_value::<Vec<Position>>(serde_json::Value::Array(positions_array.clone())) {
+                    dashboard_data.active_positions = positions;
+                    dashboard_data.system_status.active_positions = dashboard_data.active_positions.len() as i64;
+                }
+            }
         }
     }
 
@@ -218,8 +226,12 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
         .send()
         .await
     {
-        if let Ok(trades) = response.json::<Vec<Trade>>().await {
-            dashboard_data.recent_trades = trades;
+        if let Ok(api_response) = response.json::<serde_json::Value>().await {
+            if let Some(trades_array) = api_response["data"].as_array() {
+                if let Ok(trades) = serde_json::from_value::<Vec<Trade>>(serde_json::Value::Array(trades_array.clone())) {
+                    dashboard_data.recent_trades = trades;
+                }
+            }
         }
     }
 
@@ -240,8 +252,12 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
         .send()
         .await
     {
-        if let Ok(price_history) = response.json::<Vec<PriceData>>().await {
-            dashboard_data.price_history = price_history;
+        if let Ok(api_response) = response.json::<serde_json::Value>().await {
+            if let Some(price_history_array) = api_response["data"].as_array() {
+                if let Ok(price_history) = serde_json::from_value::<Vec<PriceData>>(serde_json::Value::Array(price_history_array.clone())) {
+                    dashboard_data.price_history = price_history;
+                }
+            }
         }
     }
 
@@ -285,8 +301,8 @@ async fn index() -> Result<HttpResponse> {
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: #333;
+            background: linear-gradient(135deg, #000000 0%, #0a0a0a 25%, #1a1a1a 50%, #0a0a0a 75%, #000000 100%);
+            color: #ffffff;
             min-height: 100vh;
         }
 
@@ -299,18 +315,23 @@ async fn index() -> Result<HttpResponse> {
         .header {
             text-align: center;
             margin-bottom: 30px;
-            color: white;
+            color: #9945ff;
         }
 
         .header h1 {
             font-size: 2.5rem;
             margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+            text-shadow: 0 0 30px rgba(153, 69, 255, 0.7);
+            background: linear-gradient(45deg, #9945ff, #14f195);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
 
         .header p {
             font-size: 1.1rem;
-            opacity: 0.9;
+            opacity: 0.7;
+            color: #888888;
         }
 
         .grid {
@@ -321,23 +342,39 @@ async fn index() -> Result<HttpResponse> {
         }
 
         .card {
-            background: white;
+            background: linear-gradient(145deg, #0a0a0a, #1a1a1a);
+            border: 1px solid #333333;
             border-radius: 15px;
             padding: 20px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-            transition: transform 0.3s ease;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, #9945ff, #14f195);
         }
 
         .card:hover {
             transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(153, 69, 255, 0.3);
+            border-color: #9945ff;
         }
 
         .card h3 {
-            color: #667eea;
+            color: #9945ff;
             margin-bottom: 15px;
             font-size: 1.2rem;
-            border-bottom: 2px solid #f0f0f0;
+            border-bottom: 2px solid #333333;
             padding-bottom: 10px;
+            text-shadow: 0 0 10px rgba(153, 69, 255, 0.5);
         }
 
         .status-grid {
@@ -350,17 +387,21 @@ async fn index() -> Result<HttpResponse> {
             text-align: center;
             padding: 15px;
             border-radius: 10px;
-            background: #f8f9fa;
+            background: linear-gradient(145deg, #0a0a0a, #1a1a1a);
+            border: 1px solid #333333;
+            color: #ffffff;
         }
 
         .status-item.connected {
-            background: #d4edda;
-            color: #155724;
+            background: linear-gradient(145deg, #0d2b1a, #1a2e1a);
+            border-color: #14f195;
+            color: #14f195;
         }
 
         .status-item.disconnected {
-            background: #f8d7da;
-            color: #721c24;
+            background: linear-gradient(145deg, #2b1a1a, #2e1a1a);
+            border-color: #ff6b6b;
+            color: #ff6b6b;
         }
 
         .metric {
@@ -368,7 +409,7 @@ async fn index() -> Result<HttpResponse> {
             justify-content: space-between;
             align-items: center;
             padding: 10px 0;
-            border-bottom: 1px solid #eee;
+            border-bottom: 1px solid #333333;
         }
 
         .metric:last-child {
@@ -380,9 +421,9 @@ async fn index() -> Result<HttpResponse> {
             font-size: 1.1rem;
         }
 
-        .positive { color: #28a745; }
-        .negative { color: #dc3545; }
-        .neutral { color: #6c757d; }
+        .positive { color: #14f195; text-shadow: 0 0 5px rgba(20, 241, 149, 0.5); }
+        .negative { color: #ff6b6b; text-shadow: 0 0 5px rgba(255, 107, 107, 0.5); }
+        .neutral { color: #888888; }
 
         .price-chart {
             grid-column: 1 / -1;
@@ -394,45 +435,61 @@ async fn index() -> Result<HttpResponse> {
             margin: 5px 0;
             border-radius: 8px;
             border-left: 4px solid;
+            background: linear-gradient(145deg, #0a0a0a, #1a1a1a);
+            border: 1px solid #333333;
         }
 
-        .signal-buy { background: #d4edda; border-left-color: #28a745; }
-        .signal-sell { background: #f8d7da; border-left-color: #dc3545; }
-        .signal-hold { background: #fff3cd; border-left-color: #ffc107; }
+        .signal-buy { 
+            background: linear-gradient(145deg, #0d2b1a, #1a2e1a); 
+            border-left-color: #14f195; 
+            border-color: #14f195;
+        }
+        .signal-sell { 
+            background: linear-gradient(145deg, #2b1a1a, #2e1a1a); 
+            border-left-color: #ff6b6b; 
+            border-color: #ff6b6b;
+        }
+        .signal-hold { 
+            background: linear-gradient(145deg, #2b2b1a, #2e2e1a); 
+            border-left-color: #9945ff; 
+            border-color: #9945ff;
+        }
 
         .refresh-btn {
             position: fixed;
             bottom: 30px;
             right: 30px;
-            background: #667eea;
-            color: white;
+            background: linear-gradient(145deg, #9945ff, #14f195);
+            color: #ffffff;
             border: none;
             border-radius: 50%;
             width: 60px;
             height: 60px;
             font-size: 1.5rem;
             cursor: pointer;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            box-shadow: 0 5px 15px rgba(153, 69, 255, 0.3);
             transition: all 0.3s ease;
         }
 
         .refresh-btn:hover {
-            background: #5a6fd8;
+            background: linear-gradient(145deg, #14f195, #9945ff);
             transform: scale(1.1);
+            box-shadow: 0 8px 25px rgba(153, 69, 255, 0.5);
         }
 
         .loading {
             text-align: center;
             padding: 20px;
-            color: #667eea;
+            color: #9945ff;
         }
 
         .error {
-            background: #f8d7da;
-            color: #721c24;
+            background: linear-gradient(145deg, #2b1a1a, #2e1a1a);
+            color: #ff6b6b;
             padding: 15px;
             border-radius: 8px;
             margin: 10px 0;
+            border: 1px solid #ff6b6b;
         }
     </style>
 </head>
@@ -735,11 +792,18 @@ async fn index() -> Result<HttpResponse> {
                     datasets: [{
                         label: 'SOL/USDC Price',
                         data: prices,
-                        borderColor: '#667eea',
-                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
-                        borderWidth: 2,
+                        borderColor: '#9945ff',
+                        backgroundColor: 'rgba(153, 69, 255, 0.1)',
+                        borderWidth: 3,
                         fill: true,
-                        tension: 0.4
+                        tension: 0.4,
+                        pointBackgroundColor: '#9945ff',
+                        pointBorderColor: '#1a1a1a',
+                        pointBorderWidth: 2,
+                        pointRadius: 3,
+                        pointHoverRadius: 6,
+                        pointHoverBackgroundColor: '#14f195',
+                        pointHoverBorderColor: '#1a1a1a'
                     }]
                 },
                 options: {
@@ -755,10 +819,22 @@ async fn index() -> Result<HttpResponse> {
                             type: 'time',
                             time: {
                                 unit: 'hour'
+                            },
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.05)'
+                            },
+                            ticks: {
+                                color: '#888888'
                             }
                         },
                         y: {
-                            beginAtZero: false
+                            beginAtZero: false,
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.05)'
+                            },
+                            ticks: {
+                                color: '#888888'
+                            }
                         }
                     }
                 }

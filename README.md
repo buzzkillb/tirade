@@ -248,11 +248,13 @@ The Tirade dashboard provides a comprehensive web interface for monitoring your 
 - Connection health and uptime
 - Error tracking and alerts
 
-#### 🎨 **Modern UI**
-- Responsive design with gradient backgrounds
-- Auto-refreshing data every 30 seconds
-- Mobile-friendly interface
-- Dark theme with professional styling
+#### 🎨 **Ultra-Dark Solana Theme**
+- Beautiful ultra-dark theme inspired by Solana.com
+- Solana purple (`#9945ff`) and mint green (`#14f195`) accents
+- Pure black to dark gray gradients for eye comfort
+- Professional styling with enhanced glow effects
+- Responsive design with auto-refreshing data every 30 seconds
+- Mobile-friendly interface optimized for extended viewing
 
 ### Access
 - **URL**: http://localhost:3000
@@ -261,9 +263,10 @@ The Tirade dashboard provides a comprehensive web interface for monitoring your 
 
 ### Technical Stack
 - **Backend**: Rust with Actix-web
-- **Frontend**: HTML5, CSS3, JavaScript
-- **Charts**: Chart.js with date-fns adapter
+- **Frontend**: HTML5, CSS3, JavaScript with Chart.js
+- **Charts**: Chart.js with date-fns adapter and Solana-themed styling
 - **Data**: Real-time API calls to database service
+- **Theme**: Ultra-dark Solana-inspired design with purple and green accents
 
 ## Trading Strategy
 
@@ -290,7 +293,9 @@ The trading logic implements a multi-strategy approach:
 
 ## Recent Improvements
 
-### v3.0 Features (Current)
+### v3.1 Features (Current)
+- ✅ **Ultra-Dark Solana Theme**: Beautiful dark theme inspired by Solana.com
+- ✅ **Enhanced Visual Design**: Professional styling with purple and green accents
 - ✅ **Complete Trading Execution**: Real Solana trades via Jupiter integration
 - ✅ **Dry Run Mode**: Safe testing without actual trades
 - ✅ **Balance Tracking**: Real-time wallet balance monitoring
