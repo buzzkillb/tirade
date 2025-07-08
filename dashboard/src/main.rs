@@ -1,11 +1,15 @@
-use actix_web::{web, App, HttpServer, HttpResponse, Result};
+use actix_web::{web, App, HttpServer, HttpResponse, Result, Error};
 use actix_files::Files;
+use actix_web::web::Bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use chrono::{DateTime, Utc};
 use reqwest;
+use futures::stream::{Stream, StreamExt};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PriceData {
@@ -94,6 +98,7 @@ pub struct SystemStatus {
     pub database_connected: bool,
     pub price_feed_running: bool,
     pub trading_logic_running: bool,
+    pub trading_execution_enabled: bool,
     pub last_price_update: Option<DateTime<Utc>>,
     pub last_signal_generated: Option<DateTime<Utc>>,
     pub active_positions: i64,
@@ -124,6 +129,7 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
             database_connected: false,
             price_feed_running: false,
             trading_logic_running: false,
+            trading_execution_enabled: false,
             last_price_update: None,
             last_signal_generated: None,
             active_positions: 0,
@@ -287,6 +293,13 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
         dashboard_data.system_status.database_connected = response.status().is_success();
     }
 
+    // Check trading execution status from environment variable
+    let trading_execution_enabled = std::env::var("ENABLE_TRADING_EXECUTION")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse::<bool>()
+        .unwrap_or(false);
+    dashboard_data.system_status.trading_execution_enabled = trading_execution_enabled;
+
     // Count signals today
     if let Ok(response) = client
         .get(&format!("{}/signals/SOL%2FUSDC/count?hours=24", state.database_url))
@@ -301,6 +314,92 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
     }
 
     Ok(HttpResponse::Ok().json(dashboard_data))
+}
+
+struct DashboardStream {
+    state: web::Data<AppState>,
+    interval: tokio::time::Interval,
+}
+
+struct PriceStream {
+    state: web::Data<AppState>,
+    interval: tokio::time::Interval,
+}
+
+impl Stream for DashboardStream {
+    type Item = Result<Bytes, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.interval.poll_tick(cx).is_ready() {
+            // This is a simplified version - in a real implementation, you'd fetch fresh data
+            let data = serde_json::json!({
+                "type": "dashboard_update",
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "message": "Dashboard data updated"
+            });
+            
+            let json_str = data.to_string();
+            let bytes = format!("data: {}\n\n", json_str);
+            
+            Poll::Ready(Some(Ok(Bytes::from(bytes))))
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+impl Stream for PriceStream {
+    type Item = Result<Bytes, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.interval.poll_tick(cx).is_ready() {
+            let state = self.state.clone();
+            
+            // For now, we'll send a simple update message
+            // In a production system, you'd want to implement a proper async stream
+            // that can fetch and send real-time price data
+            let data = serde_json::json!({
+                "type": "price_update",
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "message": "Price data updated - fetch latest from /api/prices/latest"
+            });
+            
+            let json_str = data.to_string();
+            let bytes = format!("data: {}\n\n", json_str);
+            
+            Poll::Ready(Some(Ok(Bytes::from(bytes))))
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+async fn dashboard_stream(state: web::Data<AppState>) -> Result<HttpResponse> {
+    let stream = DashboardStream {
+        state,
+        interval: tokio::time::interval(tokio::time::Duration::from_secs(30)),
+    };
+
+    Ok(HttpResponse::Ok()
+        .content_type("text/event-stream")
+        .header("Cache-Control", "no-cache")
+        .header("Connection", "keep-alive")
+        .header("Access-Control-Allow-Origin", "*")
+        .streaming(stream))
+}
+
+async fn price_stream(state: web::Data<AppState>) -> Result<HttpResponse> {
+    let stream = PriceStream {
+        state,
+        interval: tokio::time::interval(tokio::time::Duration::from_secs(1)), // Update every second
+    };
+
+    Ok(HttpResponse::Ok()
+        .content_type("text/event-stream")
+        .header("Cache-Control", "no-cache")
+        .header("Connection", "keep-alive")
+        .header("Access-Control-Allow-Origin", "*")
+        .streaming(stream))
 }
 
 async fn index() -> Result<HttpResponse> {
@@ -511,6 +610,12 @@ async fn index() -> Result<HttpResponse> {
         .price-chart {
             grid-column: 1 / -1;
             height: 400px;
+            position: relative;
+        }
+        
+        .price-chart canvas {
+            width: 100% !important;
+            height: 100% !important;
         }
 
         .chart-legend {
@@ -632,6 +737,106 @@ async fn index() -> Result<HttpResponse> {
                 rgba(153, 69, 255, 0.08) 100%);
             pointer-events: none;
         }
+        
+        /* New signal animations */
+        .signal-item.new-signal {
+            animation: newSignalPulse 2s ease-in-out;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .signal-item.new-signal::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+            animation: signalShine 1.5s ease-in-out;
+        }
+        
+        .signal-item.new-signal::after {
+            content: '🆕';
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            font-size: 1.2rem;
+            animation: newBadgeBounce 1s ease-in-out infinite;
+        }
+        
+        @keyframes newSignalPulse {
+            0% {
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(153, 69, 255, 0.7);
+            }
+            50% {
+                transform: scale(1.02);
+                box-shadow: 0 0 0 10px rgba(153, 69, 255, 0);
+            }
+            100% {
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(153, 69, 255, 0);
+            }
+        }
+        
+        @keyframes signalShine {
+            0% {
+                left: -100%;
+            }
+            100% {
+                left: 100%;
+            }
+        }
+        
+        @keyframes newBadgeBounce {
+            0%, 100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.2);
+            }
+        }
+        
+        /* Signal type specific animations */
+        .signal-buy.new-signal {
+            animation: newSignalPulse 2s ease-in-out, buySignalGlow 3s ease-in-out infinite;
+        }
+        
+        .signal-sell.new-signal {
+            animation: newSignalPulse 2s ease-in-out, sellSignalGlow 3s ease-in-out infinite;
+        }
+        
+        .signal-hold.new-signal {
+            animation: newSignalPulse 2s ease-in-out, holdSignalGlow 3s ease-in-out infinite;
+        }
+        
+        @keyframes buySignalGlow {
+            0%, 100% {
+                box-shadow: 0 0 20px rgba(20, 241, 149, 0.3);
+            }
+            50% {
+                box-shadow: 0 0 30px rgba(20, 241, 149, 0.6);
+            }
+        }
+        
+        @keyframes sellSignalGlow {
+            0%, 100% {
+                box-shadow: 0 0 20px rgba(255, 107, 107, 0.3);
+            }
+            50% {
+                box-shadow: 0 0 30px rgba(255, 107, 107, 0.6);
+            }
+        }
+        
+        @keyframes holdSignalGlow {
+            0%, 100% {
+                box-shadow: 0 0 20px rgba(153, 69, 255, 0.3);
+            }
+            50% {
+                box-shadow: 0 0 30px rgba(153, 69, 255, 0.6);
+            }
+        }
 
         .refresh-btn {
             position: fixed;
@@ -661,6 +866,50 @@ async fn index() -> Result<HttpResponse> {
             color: #9945ff;
         }
 
+        .update-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: linear-gradient(145deg, #14f195, #9945ff);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .update-indicator.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            z-index: 1000;
+        }
+
+        .connection-status.connected {
+            background: linear-gradient(145deg, #0d2b1a, #1a2e1a);
+            color: #14f195;
+            border: 1px solid #14f195;
+        }
+
+        .connection-status.disconnected {
+            background: linear-gradient(145deg, #2b1a1a, #2e1a1a);
+            color: #ff6b6b;
+            border: 1px solid #ff6b6b;
+        }
+
         .error {
             background: linear-gradient(145deg, #2b1a1a, #2e1a1a);
             color: #ff6b6b;
@@ -668,6 +917,11 @@ async fn index() -> Result<HttpResponse> {
             border-radius: 8px;
             margin: 10px 0;
             border: 1px solid #ff6b6b;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
         }
     </style>
 </head>
@@ -685,10 +939,14 @@ async fn index() -> Result<HttpResponse> {
         <div id="error" class="error" style="display: none;"></div>
 
         <div id="dashboard" style="display: none;">
-            <!-- System Status -->
+            <!-- Exchange Prices -->
             <div class="card">
-                <h3>🔧 System Status</h3>
-                <div class="status-grid" id="system-status"></div>
+                <h3>🏪 Live Exchange Prices</h3>
+                <div id="exchange-prices">
+                    <div style="text-align: center; padding: 20px; color: #888;">
+                        Loading exchange prices...
+                    </div>
+                </div>
             </div>
 
             <!-- Current Price & Performance -->
@@ -746,24 +1004,54 @@ async fn index() -> Result<HttpResponse> {
                 </div>
                 <canvas id="priceChart"></canvas>
             </div>
+
+            <!-- System Status -->
+            <div class="card">
+                <h3>🔧 System Status</h3>
+                <div class="status-grid" id="system-status"></div>
+            </div>
         </div>
     </div>
 
+    <div class="connection-status connected" id="connection-status">
+        🔗 Real-time Connected
+    </div>
+    <div class="update-indicator" id="update-indicator">
+        🔄 Updating...
+    </div>
     <button class="refresh-btn" onclick="loadDashboard()">🔄</button>
 
     <script>
         let priceChart = null;
+        let lastSignals = []; // Track previous signals to detect new ones
 
         async function loadDashboard() {
             try {
-                document.getElementById('loading').style.display = 'block';
-                document.getElementById('dashboard').style.display = 'none';
+                // Show update indicator
+                const updateIndicator = document.getElementById('update-indicator');
+                updateIndicator.classList.add('show');
+                
+                // Hide loading on subsequent updates
+                if (document.getElementById('dashboard').style.display === 'none') {
+                    document.getElementById('loading').style.display = 'block';
+                    document.getElementById('dashboard').style.display = 'none';
+                }
                 document.getElementById('error').style.display = 'none';
 
                 const response = await fetch('/api/dashboard');
                 if (!response.ok) throw new Error('Failed to fetch dashboard data');
                 
                 const data = await response.json();
+                
+                console.log('Dashboard data received:', {
+                    system_status: data.system_status,
+                    latest_prices: data.latest_prices?.length || 0,
+                    latest_indicators: data.latest_indicators?.length || 0,
+                    latest_signals: data.latest_signals?.length || 0,
+                    active_positions: data.active_positions?.length || 0,
+                    recent_trades: data.recent_trades?.length || 0,
+                    price_history: data.price_history?.length || 0
+                });
                 
                 updateSystemStatus(data.system_status);
                 updatePricePerformance(data.latest_prices, data.performance);
@@ -776,11 +1064,19 @@ async fn index() -> Result<HttpResponse> {
 
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('dashboard').style.display = 'block';
+                
+                // Hide update indicator after a short delay
+                setTimeout(() => {
+                    updateIndicator.classList.remove('show');
+                }, 1000);
             } catch (error) {
                 console.error('Error loading dashboard:', error);
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('error').style.display = 'block';
                 document.getElementById('error').textContent = 'Error loading dashboard: ' + error.message;
+                
+                // Hide update indicator on error
+                document.getElementById('update-indicator').classList.remove('show');
             }
         }
 
@@ -798,6 +1094,10 @@ async fn index() -> Result<HttpResponse> {
                 <div class="status-item ${status.trading_logic_running ? 'connected' : 'disconnected'}">
                     <div>🧠 Trading Logic</div>
                     <div>${status.trading_logic_running ? 'Running' : 'Stopped'}</div>
+                </div>
+                <div class="status-item ${status.trading_execution_enabled ? 'connected' : 'disconnected'}">
+                    <div>⚡ Trading Execution</div>
+                    <div>${status.trading_execution_enabled ? 'Enabled' : 'Disabled'}</div>
                 </div>
                 <div class="status-item">
                     <div>📊 Active Positions</div>
@@ -826,11 +1126,14 @@ async fn index() -> Result<HttpResponse> {
                 container.innerHTML = `
                     <div class="metric">
                         <span>Current Price:</span>
-                        <span class="metric-value">$${latestPrice.price.toFixed(4)}</span>
+                        <span class="metric-value" id="current-price" style="position: relative;">
+                            $${latestPrice.price.toFixed(4)}
+                            <span style="color: #14f195; font-size: 0.8rem; margin-left: 8px; animation: pulse 1s ease-in-out infinite;">●</span>
+                        </span>
                     </div>
                     <div class="metric">
                         <span>24h Change:</span>
-                        <span class="metric-value ${changeClass}">${changeSymbol} ${priceChange.toFixed(2)}%</span>
+                        <span class="metric-value ${changeClass}" id="price-change">${changeSymbol} ${priceChange.toFixed(2)}%</span>
                     </div>
                     <div class="metric">
                         <span>Total PnL:</span>
@@ -877,15 +1180,23 @@ async fn index() -> Result<HttpResponse> {
             
             if (signals.length === 0) {
                 container.innerHTML = '<p>No signals generated yet</p>';
+                lastSignals = [];
                 return;
             }
+
+            // Detect new signals by comparing with previous signals
+            const newSignals = signals.filter(signal => {
+                return !lastSignals.some(lastSignal => lastSignal.id === signal.id);
+            });
 
             container.innerHTML = signals.slice(0, 5).map(signal => {
                 const signalClass = signal.signal_type.toLowerCase();
                 const confidenceColor = signal.confidence > 70 ? 'positive' : signal.confidence > 40 ? 'neutral' : 'negative';
+                const isNew = newSignals.some(newSignal => newSignal.id === signal.id);
+                const newClass = isNew ? 'new-signal' : '';
                 
                 return `
-                    <div class="signal-item signal-${signalClass}">
+                    <div class="signal-item signal-${signalClass} ${newClass}" data-signal-id="${signal.id}">
                         <div><strong>${signal.signal_type.toUpperCase()}</strong> - ${(signal.confidence * 100).toFixed(1)}% confidence</div>
                         <div>Price: $${signal.price.toFixed(4)}</div>
                         <div>${signal.reasoning}</div>
@@ -893,6 +1204,103 @@ async fn index() -> Result<HttpResponse> {
                     </div>
                 `;
             }).join('');
+
+            // Add notification sound for new signals (if supported)
+            if (newSignals.length > 0) {
+                console.log(`🎯 New signal detected: ${newSignals[0].signal_type.toUpperCase()}`);
+                
+                // Show notification
+                showSignalNotification(newSignals[0]);
+                
+                // Remove new-signal class after animation completes
+                setTimeout(() => {
+                    newSignals.forEach(signal => {
+                        const element = document.querySelector(`[data-signal-id="${signal.id}"]`);
+                        if (element) {
+                            element.classList.remove('new-signal');
+                        }
+                    });
+                }, 3000);
+            }
+
+            // Update last signals
+            lastSignals = signals.slice(0, 5);
+        }
+        
+        function showSignalNotification(signal) {
+            // Create notification element
+            const notification = document.createElement('div');
+            notification.className = 'signal-notification';
+            
+            const signalColor = signal.signal_type.toLowerCase() === 'buy' ? '#14f195' : 
+                               signal.signal_type.toLowerCase() === 'sell' ? '#ff6b6b' : '#9945ff';
+            const signalEmoji = signal.signal_type.toLowerCase() === 'buy' ? '📈' : 
+                               signal.signal_type.toLowerCase() === 'sell' ? '📉' : '⏸️';
+            
+            notification.innerHTML = `
+                <div class="notification-content" style="display: flex; align-items: center; gap: 15px;">
+                    <div class="notification-icon" style="font-size: 2rem;">${signalEmoji}</div>
+                    <div class="notification-text">
+                        <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 5px; color: ${signalColor};">
+                            New ${signal.signal_type.toUpperCase()} Signal!
+                        </div>
+                        <div style="font-size: 0.9rem; opacity: 0.8;">
+                            ${(signal.confidence * 100).toFixed(1)}% confidence
+                        </div>
+                        <div style="font-size: 0.8rem; opacity: 0.6; margin-top: 3px;">
+                            $${signal.price.toFixed(4)}
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Add notification styles
+            notification.style.cssText = `
+                position: fixed;
+                top: 100px;
+                right: 20px;
+                background: linear-gradient(145deg, #0a0a0a, #1a1a1a);
+                border: 2px solid ${signalColor};
+                border-radius: 15px;
+                padding: 20px;
+                color: white;
+                z-index: 10000;
+                transform: translateX(400px);
+                transition: transform 0.5s ease-in-out;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.8), 0 0 20px ${signalColor}40;
+                max-width: 350px;
+                backdrop-filter: blur(10px);
+            `;
+            
+            document.body.appendChild(notification);
+            
+            // Animate in
+            setTimeout(() => {
+                notification.style.transform = 'translateX(0)';
+            }, 100);
+            
+            // Add pulsing effect
+            let pulseCount = 0;
+            const pulseInterval = setInterval(() => {
+                pulseCount++;
+                if (pulseCount >= 6) {
+                    clearInterval(pulseInterval);
+                    return;
+                }
+                notification.style.boxShadow = pulseCount % 2 === 0 ? 
+                    `0 10px 30px rgba(0,0,0,0.8), 0 0 20px ${signalColor}40` :
+                    `0 10px 30px rgba(0,0,0,0.8), 0 0 30px ${signalColor}80`;
+            }, 500);
+            
+            // Remove after 6 seconds
+            setTimeout(() => {
+                notification.style.transform = 'translateX(400px)';
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        notification.parentNode.removeChild(notification);
+                    }
+                }, 500);
+            }, 6000);
         }
 
         function updateActivePositions(positions) {
@@ -968,14 +1376,33 @@ async fn index() -> Result<HttpResponse> {
         }
 
         function updatePriceChart(priceHistory, signals = []) {
-            const ctx = document.getElementById('priceChart').getContext('2d');
+            console.log('updatePriceChart called with', priceHistory.length, 'price points');
+            
+            if (!priceHistory || priceHistory.length === 0) {
+                console.error('No price history data provided');
+                return;
+            }
+            
+            const canvas = document.getElementById('priceChart');
+            if (!canvas) {
+                console.error('Price chart canvas not found');
+                return;
+            }
+            
+            console.log('Canvas found, getting context...');
+            const ctx = canvas.getContext('2d');
             
             if (priceChart) {
+                console.log('Destroying existing chart');
                 priceChart.destroy();
             }
 
+            console.log('Creating chart with', priceHistory.length, 'price points');
             const labels = priceHistory.map(p => new Date(p.timestamp));
             const prices = priceHistory.map(p => p.price);
+            
+            console.log('Labels:', labels.length, 'Prices:', prices.length);
+            console.log('Sample price data:', prices.slice(0, 3));
 
             // Create gradient background
             const gradient = ctx.createLinearGradient(0, 0, 0, 400);
@@ -1102,8 +1529,426 @@ async fn index() -> Result<HttpResponse> {
             });
         }
 
-        // Auto-refresh every 30 seconds
-        setInterval(loadDashboard, 30000);
+        // Real-time updates using Server-Sent Events
+        const dashboardEventSource = new EventSource('/api/dashboard/stream');
+        const priceEventSource = new EventSource('/api/price/stream');
+        
+        // Dashboard updates (every 30 seconds)
+        dashboardEventSource.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'dashboard_update') {
+                    console.log('Received dashboard update:', data.message);
+                    loadDashboard();
+                }
+            } catch (error) {
+                console.error('Error parsing dashboard SSE data:', error);
+            }
+        };
+        
+        // Price updates (every second)
+        priceEventSource.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'price_update') {
+                    console.log('Received price update:', data.message);
+                    updatePrices();
+                }
+            } catch (error) {
+                console.error('Error parsing price SSE data:', error);
+            }
+        };
+        
+        dashboardEventSource.onopen = function(event) {
+            console.log('Dashboard SSE connection established');
+            document.getElementById('connection-status').className = 'connection-status connected';
+            document.getElementById('connection-status').textContent = '🔗 Real-time Connected';
+        };
+        
+        priceEventSource.onopen = function(event) {
+            console.log('Price SSE connection established');
+        };
+        
+        dashboardEventSource.onerror = function(error) {
+            console.error('Dashboard SSE connection error:', error);
+            document.getElementById('connection-status').className = 'connection-status disconnected';
+            document.getElementById('connection-status').textContent = '❌ Connection Lost';
+            
+            // Fallback to polling if SSE fails
+            setTimeout(() => {
+                console.log('Falling back to polling...');
+                setInterval(loadDashboard, 30000);
+            }, 5000);
+        };
+        
+        priceEventSource.onerror = function(error) {
+            console.error('Price SSE connection error:', error);
+            // Fallback to polling for prices
+            setTimeout(() => {
+                console.log('Falling back to price polling...');
+                setInterval(updatePrices, 1000);
+            }, 2000);
+        };
+        
+        // Function to update only prices (faster than full dashboard reload)
+        async function updatePrices() {
+            try {
+                // Fetch latest price from the dashboard API (which gets it from database)
+                const response = await fetch('/api/dashboard');
+                const data = await response.json();
+                
+                if (data.latest_prices && data.latest_prices.length > 0) {
+                    const solPrice = data.latest_prices.find(p => p.pair === 'SOL/USDC');
+                    if (solPrice) {
+                        // Update current price display
+                        const priceElement = document.getElementById('current-price');
+                        if (priceElement) {
+                            priceElement.innerHTML = `$${solPrice.price.toFixed(4)}<span style="color: #14f195; font-size: 0.8rem; margin-left: 8px; animation: pulse 1s ease-in-out infinite;">●</span>`;
+                        }
+                        
+                        // Update price change if available
+                        if (data.latest_indicators && data.latest_indicators.length > 0) {
+                            const indicator = data.latest_indicators[0];
+                            if (indicator.price_change_percent_24h) {
+                                const changeElement = document.getElementById('price-change');
+                                if (changeElement) {
+                                    const change = indicator.price_change_percent_24h;
+                                    const changeSymbol = change >= 0 ? '📈' : '📉';
+                                    changeElement.textContent = `${changeSymbol} ${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
+                                    changeElement.className = change >= 0 ? 'positive' : 'negative';
+                                }
+                            }
+                        }
+                        
+                        // Don't update chart during price updates to avoid conflicts
+                        // Chart will be updated during full dashboard refresh
+                    }
+                }
+                
+            } catch (error) {
+                console.error('Error updating prices:', error);
+            }
+        }
+        
+        // Function to fetch prices from multiple exchanges
+        async function fetchExchangePrices() {
+            try {
+                const [binanceResponse, coinbaseResponse, pythResponse, jupiterResponse] = await Promise.allSettled([
+                    fetch('https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT'),
+                    fetch('https://api.coinbase.com/v2/prices/SOL-USD/spot'),
+                    fetch('/api/dashboard'), // Pyth price from your existing dashboard API
+                    fetch('/api/dashboard') // Jupiter price from your existing dashboard API
+                ]);
+
+                const prices = {};
+
+                // Binance price
+                if (binanceResponse.status === 'fulfilled' && binanceResponse.value.ok) {
+                    try {
+                        const binanceData = await binanceResponse.value.json();
+                        if (binanceData.price) {
+                            prices.binance = parseFloat(binanceData.price);
+                        }
+                    } catch (e) {
+                        console.log('Binance data parse error:', e);
+                    }
+                }
+
+                // Coinbase price
+                if (coinbaseResponse.status === 'fulfilled' && coinbaseResponse.value.ok) {
+                    try {
+                        const coinbaseData = await coinbaseResponse.value.json();
+                        if (coinbaseData.data && coinbaseData.data.amount) {
+                            prices.coinbase = parseFloat(coinbaseData.data.amount);
+                        }
+                    } catch (e) {
+                        console.log('Coinbase data parse error:', e);
+                    }
+                }
+
+                // Pyth price from your price feed
+                if (pythResponse.status === 'fulfilled' && pythResponse.value.ok) {
+                    try {
+                        const pythData = await pythResponse.value.json();
+                        // Pyth price is in the latest_indicators array
+                        if (pythData.latest_indicators && pythData.latest_indicators.length > 0) {
+                            const latestIndicator = pythData.latest_indicators[0];
+                            if (latestIndicator.current_price) {
+                                prices.pyth = parseFloat(latestIndicator.current_price);
+                            }
+                        }
+                    } catch (e) {
+                        console.log('Pyth data parse error:', e);
+                    }
+                }
+
+                // Jupiter price from your price feed
+                if (jupiterResponse.status === 'fulfilled' && jupiterResponse.value.ok) {
+                    try {
+                        const jupiterData = await jupiterResponse.value.json();
+                        // Jupiter price is in the latest_prices array with source "jupiter"
+                        if (jupiterData.latest_prices && jupiterData.latest_prices.length > 0) {
+                            const jupiterPrice = jupiterData.latest_prices.find(p => p.source === 'jupiter');
+                            if (jupiterPrice && jupiterPrice.price) {
+                                prices.jupiter = parseFloat(jupiterPrice.price);
+                            }
+                        }
+                    } catch (e) {
+                        console.log('Jupiter data parse error:', e);
+                    }
+                }
+
+                return prices;
+            } catch (error) {
+                console.error('Error fetching exchange prices:', error);
+                return {};
+            }
+        }
+
+        // Function to update exchange prices display
+        async function updateExchangePrices() {
+            const prices = await fetchExchangePrices();
+            
+            // Update the dedicated exchange prices section
+            const exchangeElement = document.getElementById('exchange-prices');
+            if (exchangeElement) {
+                if (Object.keys(prices).length === 0) {
+                    exchangeElement.innerHTML = `
+                        <div style="text-align: center; padding: 20px; color: #ff6b6b;">
+                            ⚠️ Unable to fetch exchange prices
+                        </div>
+                    `;
+                    return;
+                }
+                
+                let priceHtml = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">';
+                
+                if (prices.binance) {
+                    priceHtml += `
+                        <div style="background: linear-gradient(145deg, #0a0a0a, #1a1a1a); border: 1px solid #f7931a; border-radius: 10px; padding: 15px; text-align: center;">
+                            <div style="color: #f7931a; font-size: 1.1rem; font-weight: bold; margin-bottom: 10px;">Binance</div>
+                            <div style="color: #14f195; font-size: 1.5rem; font-weight: bold;">$${prices.binance.toFixed(4)}</div>
+                            <div style="color: #888; font-size: 0.8rem; margin-top: 5px;">SOL/USDT</div>
+                        </div>
+                    `;
+                }
+                
+                if (prices.coinbase) {
+                    priceHtml += `
+                        <div style="background: linear-gradient(145deg, #0a0a0a, #1a1a1a); border: 1px solid #0052ff; border-radius: 10px; padding: 15px; text-align: center;">
+                            <div style="color: #0052ff; font-size: 1.1rem; font-weight: bold; margin-bottom: 10px;">Coinbase</div>
+                            <div style="color: #14f195; font-size: 1.5rem; font-weight: bold;">$${prices.coinbase.toFixed(4)}</div>
+                            <div style="color: #888; font-size: 0.8rem; margin-top: 5px;">SOL/USD</div>
+                        </div>
+                    `;
+                }
+                
+                if (prices.pyth) {
+                    priceHtml += `
+                        <div style="background: linear-gradient(145deg, #0a0a0a, #1a1a1a); border: 1px solid #9945ff; border-radius: 10px; padding: 15px; text-align: center;">
+                            <div style="color: #9945ff; font-size: 1.1rem; font-weight: bold; margin-bottom: 10px;">PYTH</div>
+                            <div style="color: #14f195; font-size: 1.5rem; font-weight: bold;">$${prices.pyth.toFixed(4)}</div>
+                            <div style="color: #888; font-size: 0.8rem; margin-top: 5px;">SOL/USD</div>
+                        </div>
+                    `;
+                }
+                
+                if (prices.jupiter) {
+                    priceHtml += `
+                        <div style="background: linear-gradient(145deg, #0a0a0a, #1a1a1a); border: 1px solid #ff6b35; border-radius: 10px; padding: 15px; text-align: center;">
+                            <div style="color: #ff6b35; font-size: 1.1rem; font-weight: bold; margin-bottom: 10px;">JUP</div>
+                            <div style="color: #14f195; font-size: 1.5rem; font-weight: bold;">$${prices.jupiter.toFixed(4)}</div>
+                            <div style="color: #888; font-size: 0.8rem; margin-top: 5px;">SOL/USDC</div>
+                        </div>
+                    `;
+                }
+                
+                priceHtml += '</div>';
+                
+                // Add last updated timestamp
+                priceHtml += `
+                    <div style="text-align: center; margin-top: 15px; color: #888; font-size: 0.8rem;">
+                        Last updated: ${new Date().toLocaleTimeString()}
+                        <span style="color: #14f195; margin-left: 8px; animation: pulse 1s ease-in-out infinite;">●</span>
+                    </div>
+                `;
+                
+                exchangeElement.innerHTML = priceHtml;
+            }
+            
+            // Also update the main price display with the first available price
+            const priceElement = document.getElementById('current-price');
+            if (priceElement && Object.keys(prices).length > 0) {
+                const firstPrice = prices.binance || prices.coinbase || prices.pyth || prices.jupiter;
+                if (firstPrice) {
+                    priceElement.innerHTML = `$${firstPrice.toFixed(4)}<span style="color: #14f195; font-size: 0.8rem; margin-left: 8px; animation: pulse 1s ease-in-out infinite;">●</span>`;
+                }
+            }
+        }
+
+        // Update exchange prices every 1 second
+        setInterval(updateExchangePrices, 1000);
+        
+        // Initial fetch
+        updateExchangePrices();
+        
+        // Function to update the price chart with new data
+        function updatePriceChart(priceHistory, signals) {
+            console.log('updatePriceChart called with', priceHistory.length, 'price points');
+            
+            if (!priceHistory || priceHistory.length === 0) {
+                console.error('No price history data provided');
+                return;
+            }
+            
+            const canvas = document.getElementById('priceChart');
+            if (!canvas) {
+                console.error('Price chart canvas not found');
+                return;
+            }
+            
+            console.log('Canvas found, getting context...');
+            const ctx = canvas.getContext('2d');
+            
+            // Always create a new chart (this is the main chart creation function)
+            if (priceChart) {
+                console.log('Destroying existing chart');
+                priceChart.destroy();
+            }
+
+            console.log('Creating chart with', priceHistory.length, 'price points');
+            const labels = priceHistory.map(p => new Date(p.timestamp));
+            const prices = priceHistory.map(p => p.price);
+            
+            console.log('Labels:', labels.length, 'Prices:', prices.length);
+            console.log('Sample price data:', prices.slice(0, 3));
+
+            // Create gradient background
+            const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+            gradient.addColorStop(0, 'rgba(153, 69, 255, 0.3)');
+            gradient.addColorStop(0.5, 'rgba(20, 241, 149, 0.1)');
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0.05)');
+
+            // Create signal-based dot colors
+            const pointColors = priceHistory.map(pricePoint => {
+                const priceTime = new Date(pricePoint.timestamp);
+                
+                // Find the closest signal to this price point (within 5 minutes)
+                const closestSignal = signals.find(signal => {
+                    const signalTime = new Date(signal.timestamp);
+                    const timeDiff = Math.abs(priceTime - signalTime);
+                    return timeDiff <= 5 * 60 * 1000; // 5 minutes in milliseconds
+                });
+
+                if (closestSignal) {
+                    switch (closestSignal.signal_type.toLowerCase()) {
+                        case 'buy':
+                            return '#14f195'; // Green for buy
+                        case 'sell':
+                            return '#ff6b6b'; // Red for sell
+                        case 'hold':
+                            return '#9945ff'; // Purple for hold
+                        default:
+                            return '#9945ff'; // Default purple
+                    }
+                }
+                
+                // Default color for points without signals
+                return '#9945ff';
+            });
+
+            priceChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'SOL/USDC Price',
+                        data: prices,
+                        borderColor: '#9945ff',
+                        backgroundColor: gradient,
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: pointColors,
+                        pointBorderColor: '#0a0a0a',
+                        pointBorderWidth: 2,
+                        pointRadius: 4,
+                        pointHoverRadius: 8,
+                        pointHoverBackgroundColor: '#14f195',
+                        pointHoverBorderColor: '#0a0a0a',
+                        pointHoverBorderWidth: 3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            callbacks: {
+                                afterBody: function(context) {
+                                    const dataIndex = context[0].dataIndex;
+                                    const priceTime = new Date(priceHistory[dataIndex].timestamp);
+                                    
+                                    // Find signal info for this point
+                                    const signal = signals.find(s => {
+                                        const signalTime = new Date(s.timestamp);
+                                        const timeDiff = Math.abs(priceTime - signalTime);
+                                        return timeDiff <= 5 * 60 * 1000;
+                                    });
+                                    
+                                    if (signal) {
+                                        return [
+                                            `Signal: ${signal.signal_type.toUpperCase()}`,
+                                            `Confidence: ${(signal.confidence * 100).toFixed(1)}%`,
+                                            `Reason: ${signal.reasoning}`
+                                        ];
+                                    }
+                                    return '';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'hour'
+                            },
+                            grid: {
+                                color: 'rgba(153, 69, 255, 0.1)',
+                                borderColor: 'rgba(153, 69, 255, 0.2)'
+                            },
+                            ticks: {
+                                color: '#9945ff',
+                                font: {
+                                    size: 12,
+                                    weight: '500'
+                                }
+                            }
+                        },
+                        y: {
+                            beginAtZero: false,
+                            grid: {
+                                color: 'rgba(20, 241, 149, 0.1)',
+                                borderColor: 'rgba(20, 241, 149, 0.2)'
+                            },
+                            ticks: {
+                                color: '#14f195',
+                                font: {
+                                    size: 12,
+                                    weight: '500'
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            
+            console.log('Chart created successfully');
+        }
         
         // Initial load
         loadDashboard();
@@ -1119,6 +1964,9 @@ async fn index() -> Result<HttpResponse> {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // Load environment variables from .env file
+    dotenv::dotenv().ok();
+    
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
     let bind_address = std::env::var("DASHBOARD_BIND").unwrap_or_else(|_| "0.0.0.0".to_string());
     let bind_port = std::env::var("DASHBOARD_PORT").unwrap_or_else(|_| "3000".to_string());
@@ -1138,6 +1986,8 @@ async fn main() -> std::io::Result<()> {
             .app_data(app_state.clone())
             .route("/", web::get().to(index))
             .route("/api/dashboard", web::get().to(get_dashboard_data))
+            .route("/api/dashboard/stream", web::get().to(dashboard_stream))
+            .route("/api/price/stream", web::get().to(price_stream))
             .service(Files::new("/static", "./static").show_files_listing())
     })
     .bind(&bind_addr)?

@@ -35,358 +35,255 @@ Tirade is a complete, production-ready Rust-based trading bot system for Solana,
 - **Configurable via `.env` files**
 - **Database auto-initialization** with enhanced schema
 
-## Quick Start
+## 🚀 Quick Start Guide
 
-### 1. Clone the repository
+### Prerequisites
+- **Rust** (latest stable) - [Install Rust](https://rustup.rs/)
+- **SQLite3** (optional, for database inspection)
+- **Internet access** (for price feeds and Solana RPC)
+- **Solana wallet** with USDC and SOL for trading
+
+### Step 1: Clone and Setup
 ```bash
 git clone <your-repo-url>
 cd tirade
 ```
 
-### 2. Set up environment variables
-Copy the example env file and configure your settings:
+### Step 2: Configure Environment
 ```bash
+# Copy the example environment file
 cp env.example .env
+
+# Edit the .env file with your settings
+nano .env
 ```
 
-Edit `.env` with your configuration:
+**Essential Configuration:**
 ```bash
-# Solana Trading Bot Environment Variables
+# Your Solana private key (base58 encoded string)
+SOLANA_PRIVATE_KEY=[your_private_key_here]
 
-# Your Solana private key (base58 encoded string from solana-cli)
-SOLANA_PRIVATE_KEY=your_private_key_here
-
-# Solana RPC URL (optional - defaults to mainnet-beta if not set)
-SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
-
-# --- Trading Execution Configuration ---
-# Enable actual trading execution (false = paper trading only)
+# Enable/disable real trading (false = paper trading only)
 ENABLE_TRADING_EXECUTION=false
 
-# Position sizing: percentage of USDC balance to use per trade (0.0 to 1.0)
-POSITION_SIZE_PERCENTAGE=0.9
-
-# Slippage tolerance: maximum acceptable slippage (0.0 to 1.0)
-SLIPPAGE_TOLERANCE=0.005
-
-# Minimum confidence threshold: minimum confidence to execute trades (0.0 to 1.0)
-MIN_CONFIDENCE_THRESHOLD=0.7
-
-# Maximum concurrent positions allowed
-MAX_CONCURRENT_POSITIONS=1
-
-# --- Database Configuration ---
+# Database configuration
 DATABASE_URL=sqlite:../data/trading_bot.db
 PRICE_FEED_DATABASE_URL=http://localhost:8080
 
-# --- Trading Logic Configuration ---
-TRADING_PAIR=SOL/USDC
-MIN_DATA_POINTS=200
-CHECK_INTERVAL_SECS=30
-STOP_LOSS_THRESHOLD=0.02
-TAKE_PROFIT_THRESHOLD=0.015
+# Trading parameters
+MIN_CONFIDENCE_THRESHOLD=0.7
+POSITION_SIZE_PERCENTAGE=0.5
+SLIPPAGE_TOLERANCE=0.005
 ```
 
-### 3. Initialize the database
-Run the provided script to create the data directory and SQLite file:
+### Step 3: Initialize Database
 ```bash
-./init-database.sh
+# Create data directory and initialize SQLite database
+mkdir -p data
+touch data/trading_bot.db
 ```
 
-### 4. Start all services (in separate terminals or with `&`)
-#### a. Start the database-service
+### Step 4: Start Services (In Order)
+
+**⚠️ IMPORTANT: Services must be started in this specific order for proper operation.**
+
+#### Terminal 1: Database Service
 ```bash
+# Start the database service first (required by all other services)
 cd database-service
 DATABASE_URL="sqlite:../data/trading_bot.db" cargo run
 ```
-#### b. Start the price-feed
+
+**Expected Output:**
+```
+🚀 Starting Database Service on http://0.0.0.0:8080
+📊 Database URL: sqlite:../data/trading_bot.db
+🌐 External Access: http://YOUR_VM_PUBLIC_IP:8080
+```
+
+#### Terminal 2: Price Feed
 ```bash
+# Start the price feed service (feeds data to database)
 cd price-feed
 cargo run
 ```
-#### c. Start the trading-logic
+
+**Expected Output:**
+```
+🚀 Starting Price Feed Service
+📊 Database URL: http://localhost:8080
+🔗 Pyth Feed: SOL/USDC
+⏱️  Polling interval: 1 seconds
+```
+
+#### Terminal 3: Trading Logic
 ```bash
+# Start the trading logic service (analyzes data and generates signals)
 cd trading-logic
-cargo run
+DATABASE_URL="http://localhost:8080" cargo run
 ```
-#### d. Start the dashboard (optional)
-```bash
-./start_dashboard.sh
+
+**Expected Output:**
 ```
-Or manually:
+🚀 Starting Trading Logic Engine
+📊 Database URL: http://localhost:8080
+🔗 Trading Pair: SOL/USDC
+⏱️  Check Interval: 30 seconds
+🔄 Trading Execution: ENABLED (or PAPER TRADING)
+```
+
+#### Terminal 4: Dashboard (Optional)
 ```bash
+# Start the web dashboard for monitoring
 cd dashboard
 DATABASE_URL="http://localhost:8080" cargo run
 ```
 
-### 5. Monitor logs and dashboard
-Each service logs to the console. The trading-logic bot will show:
-- Position recovery on startup
-- Real-time trading analysis
-- Signal generation and confidence levels
-- Position management (open/close)
-- Performance metrics
-- Trade execution (dry run or real)
+**Expected Output:**
+```
+🚀 Starting Tirade Dashboard on http://0.0.0.0:3000
+📊 Database URL: http://localhost:8080
+🌐 External Access: http://YOUR_VM_PUBLIC_IP:3000
+```
 
-**🌐 Dashboard Access**: Open http://localhost:3000 in your browser to view the real-time trading dashboard with:
-- Live price charts and technical indicators
-- Trading signals and confidence levels
-- Active positions and P&L tracking
-- Performance metrics and statistics
-- System status monitoring
-- Auto-refreshing data every 30 seconds
+### Step 5: Verify System Status
 
-## Trading Execution
+#### Check Database Service
+```bash
+curl http://localhost:8080/health
+```
+**Expected Response:** `{"status":"healthy"}`
 
-### Dry Run Mode (Default)
-- **Safe Testing**: No actual trades executed
-- **Full Simulation**: Complete pipeline testing
-- **Balance Calculation**: Uses real wallet balances for position sizing
-- **No Database Impact**: Dry runs don't affect profit tracking
+#### Check Price Feed
+- Look for price data being logged in Terminal 2
+- Should see SOL/USDC prices every second
 
-### Real Trading Mode
-To enable real trading, set in `.env`:
+#### Check Trading Logic
+- Look for trading analysis logs in Terminal 3
+- Should see "Trading Analysis Report" every 30 seconds
+
+#### Access Dashboard
+- Open browser to: **http://localhost:3000**
+- Should see real-time data and system status
+
+### Step 6: Monitor and Configure
+
+#### Dashboard Features
+- **📊 Live Price Charts**: Real-time SOL/USDC price with technical indicators
+- **�� Trading Signals**: Live signal generation with confidence levels
+- **📈 Position Management**: Active positions and P&L tracking
+- **🔧 System Status**: Service health indicators
+- **⚡ Trading Execution**: Shows if real trading is enabled/disabled
+
+#### Key Monitoring Points
+1. **Database Connected**: Should show "Connected" (green)
+2. **Price Feed Running**: Should show "Running" (green)
+3. **Trading Logic Running**: Should show "Running" (green)
+4. **Trading Execution**: Shows "Enabled" or "Disabled" based on your `.env` setting
+
+### Step 7: Enable Real Trading (Optional)
+
+**⚠️ WARNING: Only enable after thorough testing with paper trading!**
+
+1. **Edit `.env` file:**
 ```bash
 ENABLE_TRADING_EXECUTION=true
 ```
 
-**⚠️ WARNING**: Real trading will execute actual swaps on Solana mainnet using your wallet funds.
-
-### Position Sizing
-- **USDC Trades**: Uses 90% of available USDC balance (configurable)
-- **SOL Trades**: Uses 90% of available SOL balance (configurable)
-- **Single Position**: Maximum 1 concurrent position (configurable)
-- **Slippage Protection**: 0.5% maximum slippage tolerance
-
-### Balance Tracking
-The system automatically:
-- Checks wallet balances before each trade
-- Calculates position sizes based on available funds
-- Tracks performance and P&L
-- Stores all trade data in the database
-
-## Enhanced Database Schema
-
-### Tables
-- **price_feeds**: Real-time price data from multiple sources
-- **technical_indicators**: Calculated indicators (SMA, RSI, volatility)
-- **trading_signals**: Generated trading signals with confidence levels
-- **positions**: Open and closed trading positions
-- **trades**: Detailed trade history with PnL
-- **trading_configs**: Strategy configurations
-- **performance_metrics**: Portfolio performance tracking
-- **wallets**: Wallet management (for future use)
-- **balance_snapshots**: Balance history (for future use)
-
-## API Endpoints (database-service)
-
-### Price Data
-- `GET /prices/{pair}/history?hours={hours}`: Price history
-- `GET /prices/{pair}/latest?source={source}`: Latest price (by source)
-- `POST /prices`: Store new price data
-
-### Technical Indicators
-- `GET /indicators/{pair}?hours={hours}`: Get calculated indicators
-- `POST /indicators/{pair}/store`: Store technical indicators
-- `GET /indicators/{pair}/latest`: Get latest indicators
-
-### Trading Signals
-- `POST /signals`: Store trading signal
-- `GET /signals/{pair}?limit={limit}`: Get trading signals
-
-### Positions
-- `POST /positions`: Create new position
-- `POST /positions/close`: Close position
-- `GET /positions/{address}/open`: Get open positions by wallet
-- `GET /positions/pair/{pair}/open`: Get open positions by trading pair
-- `PATCH /positions/{position_id}/status`: Update position status
-- `GET /positions/{address}/history?limit={limit}`: Get position history
-
-### Trading Configs
-- `POST /configs`: Create trading configuration
-- `GET /configs/{name}`: Get trading configuration
-
-### Dashboard Endpoints
-- `GET /signals/{pair}/count?hours={hours}`: Get signal count for dashboard
-- `GET /positions/active`: Get all active positions for dashboard
-- `GET /trades/recent`: Get recent trades for dashboard
-- `GET /performance/metrics`: Get performance metrics for dashboard
-
-### Health & Management
-- `GET /health`: Service health check
-- `POST /wallets`: Create wallet
-- `POST /balances`: Store balance snapshot
-- `GET /wallets/{address}/balances`: Get wallet balance history
-
-## Real-time Dashboard
-
-### Features
-The Tirade dashboard provides a comprehensive web interface for monitoring your trading bot:
-
-#### 📊 **Live Price Charts**
-- Interactive 24-hour price charts with Chart.js
-- Real-time price updates from Pyth and Jupiter
-- Technical indicator overlays (SMA, RSI)
-
-#### 🎯 **Trading Signals**
-- Live signal generation with confidence levels
-- Signal history and reasoning
-- Color-coded signal types (Buy/Sell/Hold)
-
-#### 📈 **Position Management**
-- Active position tracking with real-time P&L
-- Position entry/exit prices and timing
-- Performance metrics and statistics
-
-#### 💰 **Performance Analytics**
-- Total trades, win rate, and P&L tracking
-- Sharpe ratio and risk metrics
-- Trading volume and activity statistics
-
-#### 🔧 **System Monitoring**
-- Service status indicators (Database, Price Feed, Trading Logic)
-- Connection health and uptime
-- Error tracking and alerts
-
-#### 🎨 **Ultra-Dark Solana Theme**
-- Beautiful ultra-dark theme inspired by Solana.com
-- Solana purple (`#9945ff`) and mint green (`#14f195`) accents
-- Pure black to dark gray gradients for eye comfort
-- Professional styling with enhanced glow effects
-- Responsive design with auto-refreshing data every 30 seconds
-- Mobile-friendly interface optimized for extended viewing
-
-### Access
-- **Local Access**: http://localhost:3000
-- **External Access**: http://YOUR_VM_PUBLIC_IP:3000 (replace with your actual VM IP)
-- **Auto-refresh**: Every 30 seconds
-- **No authentication required** (local development)
-
-### External Access Configuration
-The dashboard is configured to bind to `0.0.0.0:3000` by default, making it accessible from external machines:
-
-#### **Environment Variables**
-- `DASHBOARD_BIND`: Bind address (default: `0.0.0.0`)
-- `DASHBOARD_PORT`: Port number (default: `3000`)
-- `DATABASE_URL`: Database service URL (default: `http://localhost:8080`)
-
-#### **Access Examples**
+2. **Restart only the trading logic service:**
 ```bash
-# Default (external access enabled)
+# In Terminal 3, stop with Ctrl+C, then restart:
+cd trading-logic
 DATABASE_URL="http://localhost:8080" cargo run
-
-# Custom port
-DATABASE_URL="http://localhost:8080" DASHBOARD_PORT="8080" cargo run
-
-# Localhost only
-DATABASE_URL="http://localhost:8080" DASHBOARD_BIND="127.0.0.1" cargo run
 ```
 
-#### **Network Requirements**
-- **Azure VM**: Ensure port 3000 is open in Network Security Group
-- **Firewall**: Configure firewall to allow inbound traffic on port 3000
-- **Local Network**: Access via local IP if on same network
+3. **Verify in dashboard:**
+- Trading Execution should now show "Enabled" (green)
 
-### Technical Stack
-- **Backend**: Rust with Actix-web
-- **Frontend**: HTML5, CSS3, JavaScript with Chart.js
-- **Charts**: Chart.js with date-fns adapter and Solana-themed styling
-- **Data**: Real-time API calls to database service
-- **Theme**: Ultra-dark Solana-inspired design with purple and green accents
+## 🔧 Service Management
 
-## Trading Strategy
+### Stopping Services
+```bash
+# Stop individual services with Ctrl+C in their terminals
+# Or kill all services:
+pkill -f "cargo run"
+```
 
-### Signal Generation
-The trading logic implements a multi-strategy approach:
+### Restarting Services
+```bash
+# Always restart in order: Database → Price Feed → Trading Logic → Dashboard
+# Only restart the specific service that needs updating
+```
 
-1. **RSI Mean Reversion**: 
-   - Buy when RSI < 25 (oversold)
-   - Sell when RSI > 75 (overbought)
+### Troubleshooting
 
-2. **Trend Following**:
-   - Buy when price > SMA(20) and RSI in bullish range
-   - Sell when price < SMA(20) and RSI in bearish range
+#### Port Already in Use
+```bash
+# Check what's using the port
+lsof -i:8080  # Database service
+lsof -i:3000  # Dashboard
 
-3. **Dynamic Thresholds**:
-   - Confidence thresholds adjust based on market volatility
-   - Take profit and stop loss levels are dynamic
+# Kill processes using the port
+lsof -ti:8080 | xargs kill -9
+lsof -ti:3000 | xargs kill -9
+```
 
-### Position Management
-- **Position Persistence**: Positions are stored in database and recovered on restart
-- **Risk Management**: Dynamic take profit and stop loss levels
-- **Trade Tracking**: All trades are logged with PnL calculations
-- **Real Execution**: Direct integration with Solana blockchain
+#### Database Connection Issues
+```bash
+# Verify database service is running
+curl http://localhost:8080/health
 
-## Recent Improvements
+# Check database file exists
+ls -la data/trading_bot.db
+```
 
-### Dashboard Enhancements (Latest)
-- **External Access**: Dashboard now binds to `0.0.0.0:3000` by default for external access
-- **Technical Indicators Fix**: Resolved API parsing issues for RSI, SMA, and volatility display
-- **Confidence Display Fix**: Corrected percentage calculation for trading signal confidence
-- **Enhanced Logging**: Added external access URL display during startup
-- **Configurable Binding**: Added environment variables for flexible network configuration
+#### Environment Variable Issues
+```bash
+# Verify .env file is in the correct location
+ls -la .env
 
-### v3.1 Features (Current)
-- ✅ **External Access Configuration**: Dashboard accessible from external machines via `0.0.0.0:3000`
-- ✅ **Configurable Network Binding**: Environment variables for bind address and port
-- ✅ **Ultra-Dark Solana Theme**: Beautiful dark theme inspired by Solana.com
-- ✅ **Enhanced Visual Design**: Professional styling with purple and green accents
-- ✅ **Fixed Technical Indicators**: Proper API parsing and display of RSI, SMA, and volatility data
-- ✅ **Fixed Confidence Display**: Correct percentage display for trading signal confidence
-- ✅ **Complete Trading Execution**: Real Solana trades via Jupiter integration
-- ✅ **Dry Run Mode**: Safe testing without actual trades
-- ✅ **Balance Tracking**: Real-time wallet balance monitoring
-- ✅ **Position Sizing**: Configurable position sizes (90% of balance)
-- ✅ **Slippage Protection**: 0.5% maximum slippage tolerance
-- ✅ **Single Position Management**: One trade at a time with configurable limits
-- ✅ **Enhanced Environment Configuration**: Centralized .env configuration
-- ✅ **Real-time Trade Execution**: Direct blockchain integration
-- ✅ **Comprehensive Logging**: Detailed execution logs and performance tracking
+# Check environment variables are loaded
+echo $DATABASE_URL
+echo $ENABLE_TRADING_EXECUTION
+```
 
-### v2.0 Features
-- ✅ **Enhanced Database Schema**: Comprehensive data storage for all trading activities
-- ✅ **Position Persistence**: Trading logic recovers positions after restarts
-- ✅ **Complete Data Storage**: All signals, indicators, positions, and trades are stored
-- ✅ **Improved API**: RESTful endpoints for all data access
-- ✅ **Better Error Handling**: Comprehensive error handling and logging
-- ✅ **Dynamic Strategy**: Adaptive thresholds based on market conditions
-- ✅ **Performance Tracking**: Built-in performance metrics and trade history
+## 📊 Expected System Behavior
 
-## Configuration
+### Normal Operation
+- **Price Feed**: Updates every 1 second
+- **Trading Logic**: Analyzes every 30 seconds
+- **Dashboard**: Refreshes every 30 seconds
+- **Database**: Stores all data persistently
 
-### Trading Parameters
-- **Position Size**: 90% of available balance (configurable)
-- **Slippage Tolerance**: 0.5% (50 basis points)
-- **Confidence Threshold**: 70% minimum for trade execution
-- **Max Positions**: 1 concurrent position
-- **Check Interval**: 30 seconds between analyses
+### Log Messages to Watch For
+```
+✅ Database Service: "Starting Database Service"
+✅ Price Feed: "Starting Price Feed Service"
+✅ Trading Logic: "Starting Trading Logic Engine"
+✅ Dashboard: "Starting Tirade Dashboard"
+```
 
-### Environment Variables
-All configuration is centralized in the root `.env` file:
-- Solana wallet configuration
-- Trading execution settings
-- Database connections
-- Strategy parameters
+### Error Messages to Address
+```
+❌ "Address already in use" → Kill existing processes
+❌ "Database connection failed" → Check database service is running
+❌ "SOLANA_PRIVATE_KEY not found" → Check .env file configuration
+❌ "Permission denied" → Check file permissions and ownership
+```
 
-## Notes
-- **Dry runs are completely safe** and don't affect your database or profit tracking
-- **Real trading requires careful configuration** - test thoroughly with dry runs first
-- All configuration is via the root `.env` file
-- The database is auto-initialized on first run with the enhanced schema
-- Position state is automatically recovered when the trading logic restarts
-- The system uses Jupiter for best execution and liquidity
+## 🎯 Next Steps
 
-## Requirements
-- Rust (latest stable)
-- SQLite3 (for inspecting the DB, optional)
-- Internet access (for price feeds and Solana RPC)
-- Solana wallet with USDC and SOL for trading
+1. **Monitor the dashboard** for 10-15 minutes to ensure stable operation
+2. **Review trading signals** and confidence levels
+3. **Test with paper trading** before enabling real trading
+4. **Adjust strategy parameters** in `.env` if needed
+5. **Enable real trading** only after thorough testing
 
-## Security
-- **Do not commit private keys or sensitive information.**
-- **Test thoroughly with dry runs before enabling real trading.**
-- This project is for research and development. Use at your own risk.
-- **Never share your private keys or .env file.**
+## 📞 Support
 
-## License
-MIT 
+If you encounter issues:
+1. Check all services are running in the correct order
+2. Verify environment variables are set correctly
+3. Check the logs in each terminal for error messages
+4. Ensure ports 8080 and 3000 are available
+5. Verify internet connectivity for price feeds 

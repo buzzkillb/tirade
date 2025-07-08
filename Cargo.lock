@@ -1442,6 +1442,8 @@ dependencies = [
  "actix-files",
  "actix-web",
  "chrono",
+ "dotenv",
+ "futures",
  "reqwest",
  "serde",
  "serde_json",
