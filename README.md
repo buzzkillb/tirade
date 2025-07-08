@@ -105,9 +105,11 @@ chmod +x start-tirade.sh init-database.sh
 - 🌐 Start Dashboard (localhost:3000)
 
 #### 4. Manual Startup (Alternative)
+
+##### Option A: Multiple Terminals
 ```bash
 # Terminal 1: Database Service
-DATABASE_URL="http://localhost:8080" cargo run --bin database-service
+DATABASE_URL="sqlite:data/trading_bot.db" cargo run --bin database-service
 
 # Terminal 2: Price Feed
 DATABASE_URL="http://localhost:8080" cargo run --bin price-feed
@@ -118,6 +120,72 @@ DATABASE_URL="http://localhost:8080" cargo run --bin trading-logic
 # Terminal 4: Dashboard
 DATABASE_URL="http://localhost:8080" cargo run --bin dashboard
 ```
+
+##### Option B: Screen Sessions (Recommended for VPS)
+Use `screen` to run services in background sessions that persist after SSH disconnection:
+
+```bash
+# 1. Start Database Service (First - Required by all others)
+screen -S database
+DATABASE_URL="sqlite:data/trading_bot.db" cargo run --bin database-service
+# Press Ctrl+A, D to detach from screen
+
+# 2. Start Price Feed (Second - Provides data)
+screen -S price-feed
+DATABASE_URL="http://localhost:8080" cargo run --bin price-feed
+# Press Ctrl+A, D to detach from screen
+
+# 3. Start Trading Logic (Third - Analyzes data)
+screen -S trading-logic
+DATABASE_URL="http://localhost:8080" cargo run --bin trading-logic
+# Press Ctrl+A, D to detach from screen
+
+# 4. Start Dashboard (Fourth - Web interface)
+screen -S dashboard
+DATABASE_URL="http://localhost:8080" cargo run --bin dashboard
+# Press Ctrl+A, D to detach from screen
+```
+
+**Screen Management Commands:**
+```bash
+# List all screens
+screen -ls
+
+# Reattach to a screen
+screen -r database        # or price-feed, trading-logic, dashboard
+
+# Kill a specific screen
+screen -S database -X quit
+
+# Kill all screens
+pkill screen
+
+# View screen logs without attaching
+screen -S trading-logic -X hardcopy /tmp/trading-logic.log
+tail -f /tmp/trading-logic.log
+```
+
+**Verification Steps:**
+```bash
+# 1. Check Database Service
+curl http://localhost:8080/health
+
+# 2. Check Price Feed (look for price updates in screen)
+screen -r price-feed
+
+# 3. Check Trading Logic (look for analysis logs in screen)
+screen -r trading-logic
+
+# 4. Check Dashboard (visit in browser)
+curl http://localhost:3000
+```
+
+**Important Notes:**
+- **Database service** needs SQLite file path (`sqlite:data/trading_bot.db`)
+- **All other services** need HTTP URL (`http://localhost:8080`)
+- Wait 10-15 seconds between starting services
+- Trading logic shows analysis reports every 30 seconds
+- Price feed continuously fetches SOL/USDC prices
 
 ## 🌐 Dashboard Access
 
