@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     
     // Load configuration from project root .env file
-    let project_root = std::env::current_dir()?.join("..");
+    let project_root = std::env::current_dir()?;
     let env_path = project_root.join(".env");
     info!("Looking for .env file at: {:?}", env_path);
     dotenv::from_path(&env_path).ok();

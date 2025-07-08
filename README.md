@@ -58,6 +58,17 @@ cp env.example .env
 nano .env
 ```
 
+**⚠️ IMPORTANT: The `.env` file must be in the project root directory:**
+```
+/home/travanx/projects/tirade/.env
+```
+
+**NOT in subdirectories like:**
+```
+/home/travanx/projects/tirade/trading-logic/.env  ❌
+/home/travanx/projects/tirade/dashboard/.env      ❌
+```
+
 **Essential Configuration:**
 ```bash
 # Your Solana private key (base58 encoded string)
@@ -83,7 +94,19 @@ mkdir -p data
 touch data/trading_bot.db
 ```
 
-### Step 4: Start Services (In Order)
+### Step 4: Build All Services
+```bash
+# Build all services from the project root
+cargo build
+
+# Or build individual services:
+cargo build --bin database-service
+cargo build --bin price-feed
+cargo build --bin trading-logic
+cargo build --bin dashboard
+```
+
+### Step 5: Start Services (In Order)
 
 **⚠️ IMPORTANT: Services must be started in this specific order for proper operation.**
 
@@ -119,6 +142,7 @@ cargo run
 #### Terminal 3: Trading Logic
 ```bash
 # Start the trading logic service (analyzes data and generates signals)
+# The .env file should be in the project root directory (/home/travanx/projects/tirade/.env)
 cd trading-logic
 DATABASE_URL="http://localhost:8080" cargo run
 ```
@@ -146,7 +170,7 @@ DATABASE_URL="http://localhost:8080" cargo run
 🌐 External Access: http://YOUR_VM_PUBLIC_IP:3000
 ```
 
-### Step 5: Verify System Status
+### Step 6: Verify System Status
 
 #### Check Database Service
 ```bash
@@ -166,7 +190,7 @@ curl http://localhost:8080/health
 - Open browser to: **http://localhost:3000**
 - Should see real-time data and system status
 
-### Step 6: Monitor and Configure
+### Step 7: Monitor and Configure
 
 #### Dashboard Features
 - **📊 Live Price Charts**: Real-time SOL/USDC price with technical indicators
@@ -181,7 +205,7 @@ curl http://localhost:8080/health
 3. **Trading Logic Running**: Should show "Running" (green)
 4. **Trading Execution**: Shows "Enabled" or "Disabled" based on your `.env` setting
 
-### Step 7: Enable Real Trading (Optional)
+### Step 8: Enable Real Trading (Optional)
 
 **⚠️ WARNING: Only enable after thorough testing with paper trading!**
 
@@ -239,12 +263,16 @@ ls -la data/trading_bot.db
 
 #### Environment Variable Issues
 ```bash
-# Verify .env file is in the correct location
+# Verify .env file is in the correct location (project root)
 ls -la .env
 
 # Check environment variables are loaded
 echo $DATABASE_URL
 echo $ENABLE_TRADING_EXECUTION
+
+# If trading logic can't find .env, verify it's in the project root:
+# /home/travanx/projects/tirade/.env
+# NOT in /home/travanx/projects/tirade/trading-logic/.env
 ```
 
 ## 📊 Expected System Behavior
@@ -267,8 +295,9 @@ echo $ENABLE_TRADING_EXECUTION
 ```
 ❌ "Address already in use" → Kill existing processes
 ❌ "Database connection failed" → Check database service is running
-❌ "SOLANA_PRIVATE_KEY not found" → Check .env file configuration
+❌ "SOLANA_PRIVATE_KEY not found" → Check .env file is in project root directory
 ❌ "Permission denied" → Check file permissions and ownership
+❌ "Looking for .env file at: /home/travanx/projects/tirade/../.env" → .env file is in wrong location
 ```
 
 ## 🎯 Next Steps
@@ -276,7 +305,10 @@ echo $ENABLE_TRADING_EXECUTION
 1. **Monitor the dashboard** for 10-15 minutes to ensure stable operation
 2. **Review trading signals** and confidence levels
 3. **Test with paper trading** before enabling real trading
-4. **Adjust strategy parameters** in `.env` if needed
+4. **Adjust strategy parameters** in `.env` if needed:
+   - `MIN_CONFIDENCE_THRESHOLD=0.25` (lower for more frequent signals)
+   - `POSITION_SIZE_PERCENTAGE=0.5` (adjust risk per trade)
+   - `SLIPPAGE_TOLERANCE=0.005` (adjust for market conditions)
 5. **Enable real trading** only after thorough testing
 
 ## 📞 Support

@@ -53,9 +53,9 @@ impl TradingStrategy {
         let volatility = indicators.volatility.unwrap_or(0.02);
         let _price_momentum = indicators.price_momentum.unwrap_or(0.0);
         
-        // Base thresholds
-        let base_rsi_oversold = 30.0;
-        let base_rsi_overbought = 70.0;
+        // Base thresholds (less conservative for more active trading)
+        let base_rsi_oversold = 35.0;
+        let base_rsi_overbought = 65.0;
         let base_take_profit = 0.03; // 3%
         let base_stop_loss = 0.02;   // 2%
         let base_momentum_threshold = 0.005; // 0.5%
@@ -72,19 +72,19 @@ impl TradingStrategy {
             1.0
         };
         
-        // Adjust RSI thresholds based on volatility
+        // Adjust RSI thresholds based on volatility (less aggressive adjustments)
         let rsi_oversold = if volatility > 0.05 {
-            base_rsi_oversold + 5.0 // More sensitive in high volatility
+            base_rsi_oversold + 2.0 // Less aggressive in high volatility
         } else if volatility < 0.01 {
-            base_rsi_oversold - 5.0 // Less sensitive in low volatility
+            base_rsi_oversold - 2.0 // Less aggressive in low volatility
         } else {
             base_rsi_oversold
         };
         
         let rsi_overbought = if volatility > 0.05 {
-            base_rsi_overbought - 5.0 // More sensitive in high volatility
+            base_rsi_overbought - 2.0 // Less aggressive in high volatility
         } else if volatility < 0.01 {
-            base_rsi_overbought + 5.0 // Less sensitive in low volatility
+            base_rsi_overbought + 2.0 // Less aggressive in low volatility
         } else {
             base_rsi_overbought
         };
@@ -324,8 +324,8 @@ impl TradingStrategy {
         // Cap confidence at 1.0
         confidence = confidence.min(1.0_f64);
 
-        // Only generate signals if confidence is high enough
-        if confidence < 0.4 {
+        // Only generate signals if confidence is high enough (lowered threshold for more active trading)
+        if confidence < 0.25 {
             signal_type = SignalType::Hold;
             reasoning.push("Insufficient confidence for trade signal".to_string());
         }
