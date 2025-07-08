@@ -59,9 +59,9 @@ start_service() {
     echo "   Binary: $binary_name"
     echo "   Port: $port"
     
-    # Start the service in background with timeout protection
+    # Start the service in background
     echo "   🔄 Starting $binary_name..."
-    timeout 60 DATABASE_URL="http://localhost:8080" cargo run --bin $binary_name &
+    DATABASE_URL="http://localhost:8080" cargo run --bin $binary_name &
     local pid=$!
     
     # Check if the process started successfully
