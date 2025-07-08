@@ -115,6 +115,7 @@ pub struct DashboardData {
     pub recent_trades: Vec<Trade>,
     pub performance: PerformanceMetrics,
     pub price_history: Vec<PriceData>,
+    pub market_sentiment: String,
 }
 
 struct AppState {
@@ -153,6 +154,7 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
             total_volume: 0.0,
         },
         price_history: Vec::new(),
+        market_sentiment: "Neutral".to_string(),
     };
 
     // Fetch latest prices
@@ -219,6 +221,22 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
         if let Ok(api_response) = response.json::<serde_json::Value>().await {
             if let Some(signals_array) = api_response["data"].as_array() {
                 if let Ok(signals) = serde_json::from_value::<Vec<TradingSignal>>(serde_json::Value::Array(signals_array.clone())) {
+                    // Calculate market sentiment based on signals from last 4 hours
+                    let four_hours_ago = chrono::Utc::now() - chrono::Duration::hours(4);
+                    let recent_signals = signals.iter()
+                        .filter(|s| s.timestamp > four_hours_ago)
+                        .collect::<Vec<_>>();
+                    let bullish_count = recent_signals.iter().filter(|s| s.signal_type.to_lowercase() == "buy").count();
+                    let bearish_count = recent_signals.iter().filter(|s| s.signal_type.to_lowercase() == "sell").count();
+                    
+                    if bullish_count > bearish_count {
+                        dashboard_data.market_sentiment = format!("🐂 Bullish ({} bullish, {} bearish signals)", bullish_count, bearish_count);
+                    } else if bearish_count > bullish_count {
+                        dashboard_data.market_sentiment = format!("🐻 Bearish ({} bullish, {} bearish signals)", bullish_count, bearish_count);
+                    } else {
+                        dashboard_data.market_sentiment = format!("⚖️ Neutral ({} bullish, {} bearish signals)", bullish_count, bearish_count);
+                    }
+                    
                     dashboard_data.latest_signals = signals;
                     if let Some(latest_signal) = dashboard_data.latest_signals.first() {
                         dashboard_data.system_status.last_signal_generated = Some(latest_signal.timestamp);
@@ -409,7 +427,8 @@ async fn index() -> Result<HttpResponse> {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tirade Trading Dashboard</title>
+    <title>TiRADE Dashboard</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='solana' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' style='stop-color:%239945ff;stop-opacity:1' /><stop offset='50%' style='stop-color:%2314f195;stop-opacity:1' /><stop offset='100%' style='stop-color:%239945ff;stop-opacity:1' /></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23solana)'/><text x='50' y='65' font-family='Arial, sans-serif' font-size='50' font-weight='bold' text-anchor='middle' fill='white'>T</text></svg>">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
     <style>
@@ -737,6 +756,52 @@ async fn index() -> Result<HttpResponse> {
                 rgba(153, 69, 255, 0.08) 100%);
             pointer-events: none;
         }
+
+        .market-sentiment {
+            margin-bottom: 15px;
+            padding: 12px;
+            border-radius: 10px;
+            background: linear-gradient(145deg, #0a0a0a, #1a1a1a);
+            border: 1px solid #333333;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .market-sentiment::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, #9945ff, #14f195);
+        }
+
+        .sentiment-indicator {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .sentiment-text {
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: #ffffff;
+            text-shadow: 0 0 10px rgba(153, 69, 255, 0.5);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .sentiment-text:contains('🐂') {
+            color: #14f195;
+            text-shadow: 0 0 10px rgba(20, 241, 149, 0.5);
+        }
+
+        .sentiment-text:contains('🐻') {
+            color: #ff6b6b;
+            text-shadow: 0 0 10px rgba(255, 107, 107, 0.5);
+        }
         
         /* New signal animations */
         .signal-item.new-signal {
@@ -928,7 +993,7 @@ async fn index() -> Result<HttpResponse> {
 <body>
     <div class="container">
         <div class="header">
-            <h1>Tirade Trading Dashboard</h1>
+            <h1>TiRADE Dashboard</h1>
             <p>Real-time Solana Trading Bot Monitoring</p>
         </div>
 
@@ -964,6 +1029,7 @@ async fn index() -> Result<HttpResponse> {
             <!-- Latest Signals -->
             <div class="card">
                 <h3>🎯 Latest Trading Signals</h3>
+                <div class="market-sentiment" id="market-sentiment"></div>
                 <div id="latest-signals"></div>
             </div>
 
@@ -1056,7 +1122,7 @@ async fn index() -> Result<HttpResponse> {
                 updateSystemStatus(data.system_status);
                 updatePricePerformance(data.latest_prices, data.performance);
                 updateTechnicalIndicators(data.latest_indicators);
-                updateLatestSignals(data.latest_signals);
+                updateLatestSignals(data.latest_signals, data.market_sentiment);
                 updateActivePositions(data.active_positions);
                 updateRecentTrades(data.recent_trades);
                 updatePerformanceMetrics(data.performance);
@@ -1175,8 +1241,18 @@ async fn index() -> Result<HttpResponse> {
             }
         }
 
-        function updateLatestSignals(signals) {
+        function updateLatestSignals(signals, marketSentiment) {
             const container = document.getElementById('latest-signals');
+            const sentimentContainer = document.getElementById('market-sentiment');
+            
+            // Update market sentiment
+            if (sentimentContainer) {
+                sentimentContainer.innerHTML = `
+                    <div class="sentiment-indicator">
+                        <span class="sentiment-text">${marketSentiment || '⚖️ Neutral'}</span>
+                    </div>
+                `;
+            }
             
             if (signals.length === 0) {
                 container.innerHTML = '<p>No signals generated yet</p>';
