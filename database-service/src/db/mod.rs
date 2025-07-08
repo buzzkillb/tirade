@@ -1034,4 +1034,183 @@ impl Database {
             updated_at: row.try_get("updated_at")?,
         })
     }
+
+    // Dashboard-specific methods
+    pub async fn get_signals_count(&self, pair: &str, hours: i64) -> Result<i64> {
+        let row = sqlx::query(
+            r#"
+            SELECT COUNT(*) as count FROM trading_signals 
+            WHERE pair = ? AND timestamp >= datetime('now', '-' || ? || ' hours')
+            "#,
+        )
+        .bind(pair)
+        .bind(hours)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row.try_get("count")?)
+    }
+
+    pub async fn get_all_active_positions(&self) -> Result<Vec<crate::models::Position>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT * FROM positions 
+            WHERE status = 'open'
+            ORDER BY created_at DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let positions: Vec<crate::models::Position> = rows
+            .into_iter()
+            .map(|row| crate::models::Position {
+                id: row.try_get("id").unwrap_or_default(),
+                wallet_id: row.try_get("wallet_id").unwrap_or_default(),
+                pair: row.try_get("pair").unwrap_or_default(),
+                position_type: row.try_get("position_type").unwrap_or_default(),
+                entry_price: row.try_get("entry_price").unwrap_or_default(),
+                entry_time: row.try_get("entry_time").unwrap_or_default(),
+                quantity: row.try_get("quantity").unwrap_or_default(),
+                status: row.try_get("status").unwrap_or_default(),
+                exit_price: row.try_get("exit_price").ok(),
+                exit_time: row.try_get("exit_time").ok(),
+                pnl: row.try_get("pnl").ok(),
+                pnl_percent: row.try_get("pnl_percent").ok(),
+                duration_seconds: row.try_get("duration_seconds").ok(),
+                created_at: row.try_get("created_at").unwrap_or_default(),
+                updated_at: row.try_get("updated_at").unwrap_or_default(),
+            })
+            .collect();
+
+        Ok(positions)
+    }
+
+    pub async fn get_recent_trades(&self, limit: i64) -> Result<Vec<crate::models::Trade>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT t.*, p.pair FROM trades t
+            JOIN positions p ON t.position_id = p.id
+            ORDER BY t.timestamp DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let trades: Vec<crate::models::Trade> = rows
+            .into_iter()
+            .map(|row| crate::models::Trade {
+                id: row.try_get("id").unwrap_or_default(),
+                pair: row.try_get("pair").unwrap_or_default(),
+                trade_type: row.try_get("trade_type").unwrap_or_default(),
+                price: row.try_get("price").unwrap_or_default(),
+                quantity: row.try_get("quantity").unwrap_or_default(),
+                total_value: row.try_get::<f64, _>("price").unwrap_or_default() * row.try_get::<f64, _>("quantity").unwrap_or_default(),
+                timestamp: row.try_get("timestamp").unwrap_or_default(),
+                status: "completed".to_string(),
+                created_at: row.try_get("created_at").unwrap_or_default(),
+            })
+            .collect();
+
+        Ok(trades)
+    }
+
+    pub async fn get_performance_metrics(&self) -> Result<serde_json::Value> {
+        // Get total trades
+        let total_trades_row = sqlx::query(
+            r#"
+            SELECT COUNT(*) as count FROM positions WHERE status = 'closed'
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let total_trades: i64 = total_trades_row.try_get("count")?;
+
+        // Get winning trades
+        let winning_trades_row = sqlx::query(
+            r#"
+            SELECT COUNT(*) as count FROM positions 
+            WHERE status = 'closed' AND pnl > 0
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let winning_trades: i64 = winning_trades_row.try_get("count")?;
+
+        // Get losing trades
+        let losing_trades: i64 = total_trades - winning_trades;
+
+        // Calculate win rate
+        let win_rate = if total_trades > 0 {
+            (winning_trades as f64 / total_trades as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        // Get total PnL
+        let total_pnl_row = sqlx::query(
+            r#"
+            SELECT COALESCE(SUM(pnl), 0.0) as total_pnl FROM positions 
+            WHERE status = 'closed'
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let total_pnl: f64 = total_pnl_row.try_get("total_pnl")?;
+
+        // Get total PnL percent
+        let total_pnl_percent_row = sqlx::query(
+            r#"
+            SELECT COALESCE(SUM(pnl_percent), 0.0) as total_pnl_percent FROM positions 
+            WHERE status = 'closed'
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let total_pnl_percent: f64 = total_pnl_percent_row.try_get("total_pnl_percent")?;
+
+        // Calculate average trade PnL
+        let avg_trade_pnl = if total_trades > 0 {
+            total_pnl / total_trades as f64
+        } else {
+            0.0
+        };
+
+        // Get total volume
+        let total_volume_row = sqlx::query(
+            r#"
+            SELECT COALESCE(SUM(quantity * entry_price), 0.0) as total_volume FROM positions
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let total_volume: f64 = total_volume_row.try_get("total_volume")?;
+
+        // Calculate max drawdown (simplified)
+        let max_drawdown = 0.0; // TODO: Implement proper drawdown calculation
+
+        // Calculate Sharpe ratio (simplified)
+        let sharpe_ratio = if total_trades > 0 {
+            total_pnl / (total_trades as f64).sqrt()
+        } else {
+            0.0
+        };
+
+        let metrics = serde_json::json!({
+            "total_trades": total_trades,
+            "winning_trades": winning_trades,
+            "losing_trades": losing_trades,
+            "win_rate": win_rate,
+            "total_pnl": total_pnl,
+            "total_pnl_percent": total_pnl_percent,
+            "avg_trade_pnl": avg_trade_pnl,
+            "max_drawdown": max_drawdown,
+            "sharpe_ratio": sharpe_ratio,
+            "total_volume": total_volume
+        });
+
+        Ok(metrics)
+    }
 } 

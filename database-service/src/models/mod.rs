@@ -81,13 +81,13 @@ pub struct Position {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Trade {
     pub id: String,
-    pub position_id: String,
+    pub pair: String,
     pub trade_type: String,
     pub price: f64,
     pub quantity: f64,
+    pub total_value: f64,
     pub timestamp: DateTime<Utc>,
-    pub transaction_hash: Option<String>,
-    pub fees: Option<f64>,
+    pub status: String,
     pub created_at: DateTime<Utc>,
 }
 

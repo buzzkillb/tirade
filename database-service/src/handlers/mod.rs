@@ -13,6 +13,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{info, warn};
+use serde_json::Value;
 
 #[derive(Debug, Deserialize)]
 pub struct PriceHistoryQuery {
@@ -408,6 +409,79 @@ pub async fn update_position_status(
         }
         Err(e) => {
             warn!("Failed to update position status: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+// Dashboard-specific endpoints
+#[derive(Debug, Deserialize)]
+pub struct SignalCountQuery {
+    pub hours: Option<i64>,
+}
+
+pub async fn get_signals_count(
+    State(db): State<Arc<Database>>,
+    axum::extract::Path(pair): axum::extract::Path<String>,
+    Query(query): Query<SignalCountQuery>,
+) -> std::result::Result<Json<ApiResponse<Value>>, StatusCode> {
+    let hours = query.hours.unwrap_or(24);
+    
+    match db.get_signals_count(&pair, hours).await {
+        Ok(count) => {
+            let response = serde_json::json!({
+                "count": count,
+                "pair": pair,
+                "hours": hours
+            });
+            Ok(Json(ApiResponse::success(response)))
+        }
+        Err(e) => {
+            warn!("Failed to get signals count: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_active_positions_dashboard(
+    State(db): State<Arc<Database>>,
+) -> std::result::Result<Json<ApiResponse<Vec<crate::models::Position>>>, StatusCode> {
+    match db.get_all_active_positions().await {
+        Ok(positions) => {
+            info!("Retrieved {} active positions for dashboard", positions.len());
+            Ok(Json(ApiResponse::success(positions)))
+        }
+        Err(e) => {
+            warn!("Failed to get active positions for dashboard: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_recent_trades(
+    State(db): State<Arc<Database>>,
+) -> std::result::Result<Json<ApiResponse<Vec<crate::models::Trade>>>, StatusCode> {
+    match db.get_recent_trades(10).await {
+        Ok(trades) => {
+            info!("Retrieved {} recent trades for dashboard", trades.len());
+            Ok(Json(ApiResponse::success(trades)))
+        }
+        Err(e) => {
+            warn!("Failed to get recent trades: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_performance_metrics(
+    State(db): State<Arc<Database>>,
+) -> std::result::Result<Json<ApiResponse<Value>>, StatusCode> {
+    match db.get_performance_metrics().await {
+        Ok(metrics) => {
+            Ok(Json(ApiResponse::success(metrics)))
+        }
+        Err(e) => {
+            warn!("Failed to get performance metrics: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

@@ -3,4 +3,5 @@ members = [
     "solana-trading-bot",
     "price-feed",
     "database-service",
-    "trading-logic"]
+    "trading-logic",
+    "dashboard"]

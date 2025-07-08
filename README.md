@@ -1,12 +1,13 @@
 # Tirade: Solana Quant Trading Bot Suite
 
 ## Overview
-Tirade is a complete, production-ready Rust-based trading bot system for Solana, designed for automated quant trading with real-time execution capabilities. It consists of four main components:
+Tirade is a complete, production-ready Rust-based trading bot system for Solana, designed for automated quant trading with real-time execution capabilities. It consists of five main components:
 
 - **solana-trading-bot**: Handles wallet management, balance checking, and actual transaction execution via Jupiter swaps.
 - **price-feed**: Fetches real-time price data from Pyth and Jupiter APIs and stores it in a local database.
 - **database-service**: REST API service with SQLite backend for storing and querying price data, technical indicators, trading signals, positions, and performance metrics.
 - **trading-logic**: Runs the trading strategy, analyzes price history and indicators, generates signals, and executes trades with full persistence across restarts.
+- **dashboard**: Real-time web dashboard for monitoring trading performance, system status, and market data.
 
 ## Features
 - **Complete Trading Pipeline**: From price feeds to actual trade execution
@@ -30,6 +31,7 @@ Tirade is a complete, production-ready Rust-based trading bot system for Solana,
   - Dynamic confidence thresholds
   - Take profit and stop loss management
 - **REST API** for all data access and management
+- **Real-time Web Dashboard** with interactive charts and metrics
 - **Configurable via `.env` files**
 - **Database auto-initialization** with enhanced schema
 
@@ -107,8 +109,17 @@ cargo run
 cd trading-logic
 cargo run
 ```
+#### d. Start the dashboard (optional)
+```bash
+./start_dashboard.sh
+```
+Or manually:
+```bash
+cd dashboard
+DATABASE_URL="http://localhost:8080" cargo run
+```
 
-### 5. Monitor logs
+### 5. Monitor logs and dashboard
 Each service logs to the console. The trading-logic bot will show:
 - Position recovery on startup
 - Real-time trading analysis
@@ -116,6 +127,14 @@ Each service logs to the console. The trading-logic bot will show:
 - Position management (open/close)
 - Performance metrics
 - Trade execution (dry run or real)
+
+**🌐 Dashboard Access**: Open http://localhost:3000 in your browser to view the real-time trading dashboard with:
+- Live price charts and technical indicators
+- Trading signals and confidence levels
+- Active positions and P&L tracking
+- Performance metrics and statistics
+- System status monitoring
+- Auto-refreshing data every 30 seconds
 
 ## Trading Execution
 
@@ -187,11 +206,64 @@ The system automatically:
 - `POST /configs`: Create trading configuration
 - `GET /configs/{name}`: Get trading configuration
 
+### Dashboard Endpoints
+- `GET /signals/{pair}/count?hours={hours}`: Get signal count for dashboard
+- `GET /positions/active`: Get all active positions for dashboard
+- `GET /trades/recent`: Get recent trades for dashboard
+- `GET /performance/metrics`: Get performance metrics for dashboard
+
 ### Health & Management
 - `GET /health`: Service health check
 - `POST /wallets`: Create wallet
 - `POST /balances`: Store balance snapshot
 - `GET /wallets/{address}/balances`: Get wallet balance history
+
+## Real-time Dashboard
+
+### Features
+The Tirade dashboard provides a comprehensive web interface for monitoring your trading bot:
+
+#### 📊 **Live Price Charts**
+- Interactive 24-hour price charts with Chart.js
+- Real-time price updates from Pyth and Jupiter
+- Technical indicator overlays (SMA, RSI)
+
+#### 🎯 **Trading Signals**
+- Live signal generation with confidence levels
+- Signal history and reasoning
+- Color-coded signal types (Buy/Sell/Hold)
+
+#### 📈 **Position Management**
+- Active position tracking with real-time P&L
+- Position entry/exit prices and timing
+- Performance metrics and statistics
+
+#### 💰 **Performance Analytics**
+- Total trades, win rate, and P&L tracking
+- Sharpe ratio and risk metrics
+- Trading volume and activity statistics
+
+#### 🔧 **System Monitoring**
+- Service status indicators (Database, Price Feed, Trading Logic)
+- Connection health and uptime
+- Error tracking and alerts
+
+#### 🎨 **Modern UI**
+- Responsive design with gradient backgrounds
+- Auto-refreshing data every 30 seconds
+- Mobile-friendly interface
+- Dark theme with professional styling
+
+### Access
+- **URL**: http://localhost:3000
+- **Auto-refresh**: Every 30 seconds
+- **No authentication required** (local development)
+
+### Technical Stack
+- **Backend**: Rust with Actix-web
+- **Frontend**: HTML5, CSS3, JavaScript
+- **Charts**: Chart.js with date-fns adapter
+- **Data**: Real-time API calls to database service
 
 ## Trading Strategy
 

@@ -15,6 +15,7 @@ use crate::handlers::{
     get_trading_signals, create_position, close_position, get_open_positions,
     get_position_history, create_trading_config, get_trading_config,
     get_open_positions_by_pair, update_position_status,
+    get_signals_count, get_active_positions_dashboard, get_recent_trades, get_performance_metrics,
 };
 use axum::{
     routing::{get, post},
@@ -63,12 +64,16 @@ async fn main() -> Result<()> {
         .route("/indicators/:pair/latest", get(get_latest_technical_indicators))
         .route("/signals", post(store_trading_signal))
         .route("/signals/:pair", get(get_trading_signals))
+        .route("/signals/:pair/count", get(get_signals_count))
         .route("/positions", post(create_position))
         .route("/positions/close", post(close_position))
         .route("/positions/:address/open", get(get_open_positions))
         .route("/positions/:address/history", get(get_position_history))
         .route("/positions/pair/:pair/open", get(get_open_positions_by_pair))
         .route("/positions/:position_id/status", axum::routing::patch(update_position_status))
+        .route("/positions/active", get(get_active_positions_dashboard))
+        .route("/trades/recent", get(get_recent_trades))
+        .route("/performance/metrics", get(get_performance_metrics))
         .route("/configs", post(create_trading_config))
         .route("/configs/:name", get(get_trading_config))
         .layer(cors)
