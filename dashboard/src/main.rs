@@ -958,6 +958,149 @@ async fn index() -> Result<HttpResponse> {
         .signal-hold.new-signal {
             animation: newSignalPulse 2s ease-in-out, holdSignalGlow 3s ease-in-out infinite;
         }
+
+        /* Signal Triggers Styles */
+        .signal-triggers {
+            margin: 10px 0;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 6px;
+            border: 1px solid rgba(153, 69, 255, 0.2);
+        }
+
+        .triggers-label {
+            font-size: 0.85rem;
+            font-weight: bold;
+            color: #9945ff;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .triggers-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 6px;
+        }
+
+        .trigger-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.75rem;
+            color: #888;
+            padding: 4px 6px;
+            border-radius: 4px;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            cursor: default;
+            transition: all 0.2s ease;
+        }
+
+        .trigger-checkbox.active {
+            background: rgba(153, 69, 255, 0.15);
+            border-color: rgba(153, 69, 255, 0.4);
+            color: #fff;
+            box-shadow: 0 0 8px rgba(153, 69, 255, 0.2);
+        }
+
+        .trigger-checkbox input[type="checkbox"] {
+            width: 12px;
+            height: 12px;
+            accent-color: #9945ff;
+            cursor: default;
+        }
+
+        .trigger-checkbox.active input[type="checkbox"] {
+            accent-color: #14f195;
+        }
+
+        .trigger-checkbox span {
+            font-weight: 500;
+        }
+
+        /* Signal Reasoning Styles */
+        .signal-reasoning {
+            margin: 10px 0;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .reasoning-label {
+            font-size: 0.85rem;
+            font-weight: bold;
+            color: #14f195;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .reasoning-text {
+            font-size: 0.8rem;
+            color: #ffffff;
+            line-height: 1.4;
+            font-family: 'Courier New', monospace;
+        }
+
+        /* Signal Details Styles */
+        .signal-details {
+            margin: 10px 0;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .details-label {
+            font-size: 0.85rem;
+            font-weight: bold;
+            color: #ff6b6b;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .details-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 8px;
+        }
+
+        .detail-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 6px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .detail-label {
+            font-size: 0.75rem;
+            color: #888;
+            font-weight: 500;
+        }
+
+        .detail-value {
+            font-size: 0.75rem;
+            color: #fff;
+            font-weight: bold;
+        }
+
+        .detail-value.positive {
+            color: #14f195;
+        }
+
+        .detail-value.negative {
+            color: #ff6b6b;
+        }
+
+        .detail-value.neutral {
+            color: #9945ff;
+        }
         
         @keyframes buySignalGlow {
             0%, 100% {
@@ -1398,6 +1541,10 @@ async fn index() -> Result<HttpResponse> {
                     const sign = priceChanges.change_24h >= 0 ? '+' : '';
                     priceChangeSpans += `<span class="${cls}">24h: ${sign}${priceChanges.change_24h.toFixed(2)}%</span>`;
                 }
+
+                // Parse signal triggers from reasoning
+                const triggers = parseSignalTriggers(signal.reasoning);
+                
                 return `
                     <div class="signal-item signal-${signalClass} ${newClass}" data-signal-id="${signal.id}">
                         <div><strong>${signal.signal_type.toUpperCase()}</strong> - ${(signal.confidence * 100).toFixed(1)}% confidence</div>
@@ -1407,7 +1554,60 @@ async fn index() -> Result<HttpResponse> {
                                 ${priceChangeSpans}
                             </div>
                         </div>
-                        <div>${signal.reasoning}</div>
+                        <div class="signal-triggers">
+                            <div class="triggers-label">Signal Triggers:</div>
+                            <div class="triggers-grid">
+                                <label class="trigger-checkbox ${triggers.rsiDivergence ? 'active' : ''}">
+                                    <input type="checkbox" ${triggers.rsiDivergence ? 'checked' : ''} disabled>
+                                    <span>RSI Divergence</span>
+                                </label>
+                                <label class="trigger-checkbox ${triggers.movingAverage ? 'active' : ''}">
+                                    <input type="checkbox" ${triggers.movingAverage ? 'checked' : ''} disabled>
+                                    <span>Moving Average</span>
+                                </label>
+                                <label class="trigger-checkbox ${triggers.volatilityBreakout ? 'active' : ''}">
+                                    <input type="checkbox" ${triggers.volatilityBreakout ? 'checked' : ''} disabled>
+                                    <span>Volatility Breakout</span>
+                                </label>
+                                <label class="trigger-checkbox ${triggers.meanReversion ? 'active' : ''}">
+                                    <input type="checkbox" ${triggers.meanReversion ? 'checked' : ''} disabled>
+                                    <span>Mean Reversion</span>
+                                </label>
+                                <label class="trigger-checkbox ${triggers.rsiThreshold ? 'active' : ''}">
+                                    <input type="checkbox" ${triggers.rsiThreshold ? 'checked' : ''} disabled>
+                                    <span>RSI Threshold</span>
+                                </label>
+                                <label class="trigger-checkbox ${triggers.momentumConfirmation ? 'active' : ''}">
+                                    <input type="checkbox" ${triggers.momentumConfirmation ? 'checked' : ''} disabled>
+                                    <span>Momentum Confirmation</span>
+                                </label>
+                                <label class="trigger-checkbox ${triggers.trendFollowing ? 'active' : ''}">
+                                    <input type="checkbox" ${triggers.trendFollowing ? 'checked' : ''} disabled>
+                                    <span>Trend Following</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="signal-reasoning">
+                            <div class="reasoning-label">Detailed Analysis:</div>
+                            <div class="reasoning-text">${Array.isArray(signal.reasoning) ? signal.reasoning.join('<br>') : signal.reasoning}</div>
+                        </div>
+                        <div class="signal-details">
+                            <div class="details-label">Signal Details:</div>
+                            <div class="details-grid">
+                                <div class="detail-item">
+                                    <span class="detail-label">Take Profit:</span>
+                                    <span class="detail-value">${signal.take_profit ? (signal.take_profit * 100).toFixed(2) + '%' : 'N/A'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Stop Loss:</span>
+                                    <span class="detail-value">${signal.stop_loss ? (signal.stop_loss * 100).toFixed(2) + '%' : 'N/A'}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Executed:</span>
+                                    <span class="detail-value ${signal.executed ? 'positive' : 'neutral'}">${signal.executed ? '✅ Yes' : '⏳ Pending'}</span>
+                                </div>
+                            </div>
+                        </div>
                         <div><small>${new Date(signal.timestamp).toLocaleString()}</small></div>
                     </div>
                 `;
@@ -1433,6 +1633,46 @@ async fn index() -> Result<HttpResponse> {
 
             // Update last signals
             lastSignals = signals.slice(0, 5);
+        }
+
+        function parseSignalTriggers(reasoning) {
+            const triggers = {
+                rsiDivergence: false,
+                movingAverage: false,
+                volatilityBreakout: false,
+                meanReversion: false,
+                rsiThreshold: false,
+                momentumConfirmation: false,
+                trendFollowing: false
+            };
+
+            // Convert reasoning to string if it's an array
+            const reasoningText = Array.isArray(reasoning) ? reasoning.join(' ') : reasoning;
+
+            // Check for each trigger type based on the reasoning text
+            if (reasoningText.includes('RSI divergence') || reasoningText.includes('Fast RSI') && reasoningText.includes('Slow RSI')) {
+                triggers.rsiDivergence = true;
+            }
+            if (reasoningText.includes('uptrend') || reasoningText.includes('downtrend') || reasoningText.includes('SMA ratio')) {
+                triggers.movingAverage = true;
+            }
+            if (reasoningText.includes('Volatility breakout') || reasoningText.includes('volatility') && reasoningText.includes('momentum')) {
+                triggers.volatilityBreakout = true;
+            }
+            if (reasoningText.includes('Mean reversion') || reasoningText.includes('Extreme oversold') || reasoningText.includes('Extreme overbought')) {
+                triggers.meanReversion = true;
+            }
+            if (reasoningText.includes('RSI overbought') || reasoningText.includes('RSI oversold')) {
+                triggers.rsiThreshold = true;
+            }
+            if (reasoningText.includes('Momentum confirmation') || reasoningText.includes('price increase') || reasoningText.includes('price decrease')) {
+                triggers.momentumConfirmation = true;
+            }
+            if (reasoningText.includes('Trend following') || reasoningText.includes('above SMA') || reasoningText.includes('below SMA')) {
+                triggers.trendFollowing = true;
+            }
+
+            return triggers;
         }
         
         function showSignalNotification(signal) {
