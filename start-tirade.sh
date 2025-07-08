@@ -59,9 +59,17 @@ start_service() {
     echo "   Binary: $binary_name"
     echo "   Port: $port"
     
-    # Start the service in background
-    DATABASE_URL="http://localhost:8080" cargo run --bin $binary_name &
+    # Start the service in background with timeout protection
+    echo "   🔄 Starting $binary_name..."
+    timeout 60 DATABASE_URL="http://localhost:8080" cargo run --bin $binary_name &
     local pid=$!
+    
+    # Check if the process started successfully
+    sleep 2
+    if ! kill -0 $pid 2>/dev/null; then
+        echo "   ❌ Failed to start $service_name"
+        return 1
+    fi
     
     echo "   ✅ $service_name started (PID: $pid)"
     echo ""
@@ -70,8 +78,8 @@ start_service() {
     echo "   ⏳ Waiting for $service_name to be ready..."
     sleep 5
     
-    # Check if service is responding (for database service)
-    if [ "$port" != "N/A" ]; then
+    # Check if service is responding (only for database service which has health endpoint)
+    if [ "$port" = "8080" ]; then
         local max_attempts=10
         local attempt=1
         while [ $attempt -le $max_attempts ]; do
@@ -91,6 +99,10 @@ start_service() {
             echo "   ⚠️  Warning: $service_name may not be fully ready, but continuing..."
             echo "   🔍 Debug: Service may need more time to start"
         fi
+    else
+        echo "   ⏳ Waiting for $service_name to initialize..."
+        sleep 3
+        echo "   ✅ $service_name started (no health check available)"
     fi
     
     echo ""
@@ -100,12 +112,30 @@ start_service() {
 # Start services in order
 echo "📊 Starting Database Service..."
 DB_PID=$(start_service "Database Service" "database-service" "8080")
+if [ $? -ne 0 ]; then
+    echo "❌ Failed to start Database Service"
+    exit 1
+fi
 
 echo "📈 Starting Price Feed..."
+echo "   ⏳ Ensuring database is ready before starting price feed..."
+sleep 5
 PRICE_PID=$(start_service "Price Feed" "price-feed" "8081")
+if [ $? -ne 0 ]; then
+    echo "❌ Failed to start Price Feed"
+    echo "🛑 Stopping Database Service..."
+    kill $DB_PID 2>/dev/null
+    exit 1
+fi
 
 echo "🧠 Starting Trading Logic..."
 TRADING_PID=$(start_service "Trading Logic" "trading-logic" "N/A")
+if [ $? -ne 0 ]; then
+    echo "❌ Failed to start Trading Logic"
+    echo "🛑 Stopping other services..."
+    kill $DB_PID $PRICE_PID 2>/dev/null
+    exit 1
+fi
 
 echo "🌐 Starting Dashboard..."
 echo "   Note: Dashboard will bind to localhost (127.0.0.1) for security"
