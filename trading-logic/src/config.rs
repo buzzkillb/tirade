@@ -30,7 +30,7 @@ impl Config {
             trading_pair: env::var("TRADING_PAIR")
                 .unwrap_or_else(|_| "SOL/USDC".to_string()),
             min_data_points: env::var("MIN_DATA_POINTS")
-                .unwrap_or_else(|_| "200".to_string())
+                .unwrap_or_else(|_| "60".to_string())
                 .parse()
                 .map_err(|_| anyhow!("Invalid MIN_DATA_POINTS"))?,
             check_interval_secs: env::var("CHECK_INTERVAL_SECS")

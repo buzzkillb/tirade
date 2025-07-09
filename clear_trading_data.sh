@@ -94,8 +94,8 @@ DELETE FROM technical_indicators;
 -- Clear trading configs (if table exists)
 DELETE FROM trading_configs;
 
--- Reset auto-increment counters
-DELETE FROM sqlite_sequence WHERE name IN ('positions', 'trades', 'trading_signals', 'balance_snapshots', 'technical_indicators', 'trading_configs');
+-- Clear wallets (if table exists)
+DELETE FROM wallets;
 
 -- Vacuum to reclaim space
 VACUUM;

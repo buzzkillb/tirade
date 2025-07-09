@@ -42,10 +42,10 @@ impl TradingStrategy {
         let current_price = indicators.current_price;
         let timestamp = indicators.timestamp;
 
-        // Use different timeframes for analysis
-        let short_term_prices = self.get_recent_prices(prices, 24 * 3600); // 24 hours
-        let medium_term_prices = self.get_recent_prices(prices, 7 * 24 * 3600); // 7 days
-        let long_term_prices = self.get_recent_prices(prices, 30 * 24 * 3600); // 30 days
+        // Use realistic timeframes based on available data (30-second intervals)
+        let short_term_prices = self.get_recent_prices(prices, 30 * 60); // 30 minutes
+        let medium_term_prices = self.get_recent_prices(prices, 2 * 60 * 60); // 2 hours
+        let long_term_prices = self.get_recent_prices(prices, 6 * 60 * 60); // 6 hours
 
         // Calculate indicators for different timeframes
         let short_term_indicators = self.calculate_custom_indicators(&short_term_prices);
@@ -125,7 +125,8 @@ impl TradingStrategy {
     }
 
     fn calculate_custom_indicators(&self, prices: &[PriceFeed]) -> TradingIndicators {
-        if prices.len() < self.config.rsi_slow_period {
+        // Check if we have enough data for the longest indicator (SMA50 = 50 points)
+        if prices.len() < self.config.sma_long_period {
             return TradingIndicators {
                 rsi_fast: None,
                 rsi_slow: None,
@@ -216,26 +217,26 @@ impl TradingStrategy {
         if let (Some(sma_short), Some(sma_long)) = (short_term_indicators.sma_short, short_term_indicators.sma_long) {
             let ma_ratio = sma_short / sma_long;
             
-            // Strong uptrend
-            if ma_ratio > 1.02 && current_price > sma_short {
+            // Strong uptrend - use SMA50 for trend confirmation
+            if ma_ratio > 1.02 && current_price > sma_long {
                 if signal_type == SignalType::Buy {
                     confidence += 0.2;
                 } else {
                     signal_type = SignalType::Buy;
                     confidence += 0.2;
                 }
-                reasoning.push(format!("Strong uptrend: SMA ratio {:.3}, price above short SMA", ma_ratio));
+                reasoning.push(format!("Strong uptrend: SMA ratio {:.3}, price above SMA50", ma_ratio));
             }
             
-            // Strong downtrend
-            if ma_ratio < 0.98 && current_price < sma_short {
+            // Strong downtrend - use SMA50 for trend confirmation
+            if ma_ratio < 0.98 && current_price < sma_long {
                 if signal_type == SignalType::Sell {
                     confidence += 0.2;
                 } else {
                     signal_type = SignalType::Sell;
                     confidence += 0.2;
                 }
-                reasoning.push(format!("Strong downtrend: SMA ratio {:.3}, price below short SMA", ma_ratio));
+                reasoning.push(format!("Strong downtrend: SMA ratio {:.3}, price below SMA50", ma_ratio));
             }
         }
 
