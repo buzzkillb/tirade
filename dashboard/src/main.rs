@@ -7,9 +7,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use chrono::{DateTime, Utc};
 use reqwest;
-use futures::stream::{Stream, StreamExt};
+use futures::stream::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PriceData {
@@ -127,13 +128,57 @@ pub struct PriceChanges {
     pub change_24h: Option<f64>,
 }
 
+#[derive(Debug, Clone)]
+struct CachedData {
+    data: DashboardData,
+    timestamp: DateTime<Utc>,
+    ttl_seconds: i64,
+}
+
+impl CachedData {
+    fn is_expired(&self) -> bool {
+        let now = Utc::now();
+        (now - self.timestamp).num_seconds() > self.ttl_seconds
+    }
+}
+
 struct AppState {
     database_url: String,
-    cache: Arc<Mutex<HashMap<String, DashboardData>>>,
+    cache: Arc<Mutex<HashMap<String, CachedData>>>,
+    client: reqwest::Client,
 }
 
 async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> {
-    let client = reqwest::Client::new();
+    // Check cache first
+    const CACHE_TTL_SECONDS: i64 = 10; // Cache for 10 seconds
+    let cache_key = "dashboard_data";
+    
+    {
+        let cache = state.cache.lock().await;
+        if let Some(cached) = cache.get(cache_key) {
+            if !cached.is_expired() {
+                return Ok(HttpResponse::Ok().json(cached.data.clone()));
+            }
+        }
+    }
+
+    // Fetch fresh data
+    let dashboard_data = fetch_fresh_dashboard_data(&state).await;
+    
+    // Cache the result
+    {
+        let mut cache = state.cache.lock().await;
+        cache.insert(cache_key.to_string(), CachedData {
+            data: dashboard_data.clone(),
+            timestamp: Utc::now(),
+            ttl_seconds: CACHE_TTL_SECONDS,
+        });
+    }
+
+    Ok(HttpResponse::Ok().json(dashboard_data))
+}
+
+async fn fetch_fresh_dashboard_data(state: &web::Data<AppState>) -> DashboardData {
     let mut dashboard_data = DashboardData {
         system_status: SystemStatus {
             database_connected: false,
@@ -172,258 +217,396 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
         },
     };
 
-    // Fetch latest prices - try Pyth first (SOL/USD), then fall back to any SOL/USDC source
-    let mut pyth_price: Option<PriceData> = None;
+    // Make all API calls in parallel for better performance
+    let (
+        pyth_price_result,
+        jupiter_price_result,
+        coinbase_price_result,
+        indicators_result,
+        signals_result,
+        positions_result,
+        trades_result,
+        performance_result,
+        price_history_result,
+        health_result,
+        signals_count_result,
+    ) = tokio::join!(
+        fetch_pyth_price(&state.client, &state.database_url),
+        fetch_jupiter_price(&state.client, &state.database_url),
+        fetch_coinbase_price_direct(&state.client), // Direct Coinbase API call for visual reference
+        fetch_indicators(&state.client, &state.database_url),
+        fetch_signals(&state.client, &state.database_url),
+        fetch_positions(&state.client, &state.database_url),
+        fetch_trades(&state.client, &state.database_url),
+        fetch_performance(&state.client, &state.database_url),
+        fetch_price_history(&state.client, &state.database_url),
+        fetch_health(&state.client, &state.database_url),
+        fetch_signals_count(&state.client, &state.database_url),
+    );
+
+    // Process all price data sources
+    let mut all_prices = Vec::new();
+    let mut latest_timestamp = None;
     
-    // Try to get Pyth price from SOL/USD (what Pyth actually stores)
-    if let Ok(response) = client
-        .get(&format!("{}/prices/SOL%2FUSD/latest?source=pyth", state.database_url))
-        .send()
-        .await
-    {
-        if let Ok(api_response) = response.json::<serde_json::Value>().await {
-            if let Some(price_data) = api_response["data"].as_object() {
-                if let Ok(price) = serde_json::from_value::<PriceData>(serde_json::Value::Object(price_data.clone())) {
-                    pyth_price = Some(price);
-                }
-            }
+    if let Ok(Some(price)) = pyth_price_result {
+        all_prices.push(price.clone());
+        if latest_timestamp.is_none() || price.timestamp > latest_timestamp.unwrap() {
+            latest_timestamp = Some(price.timestamp);
         }
     }
     
-    // If we have Pyth data, use it; otherwise fall back to any SOL/USDC source
-    if let Some(price) = pyth_price {
-        dashboard_data.latest_prices = vec![price.clone()];
-        dashboard_data.system_status.last_price_update = Some(price.timestamp);
-        // Check if price is recent (within last 5 minutes)
-        let five_minutes_ago = chrono::Utc::now() - chrono::Duration::minutes(5);
-        dashboard_data.system_status.price_feed_running = price.timestamp > five_minutes_ago;
-    } else {
-        // Fall back to any SOL/USDC source (Jupiter, etc.)
-        if let Ok(response) = client
-            .get(&format!("{}/prices/SOL%2FUSDC/latest", state.database_url))
-            .send()
-            .await
-        {
-            if let Ok(api_response) = response.json::<serde_json::Value>().await {
-                if let Some(price_data) = api_response["data"].as_object() {
-                    if let Ok(price) = serde_json::from_value::<PriceData>(serde_json::Value::Object(price_data.clone())) {
-                        dashboard_data.latest_prices = vec![price.clone()];
-                        dashboard_data.system_status.last_price_update = Some(price.timestamp);
-                        // Check if price is recent (within last 5 minutes)
-                        let five_minutes_ago = chrono::Utc::now() - chrono::Duration::minutes(5);
-                        dashboard_data.system_status.price_feed_running = price.timestamp > five_minutes_ago;
+    if let Ok(Some(price)) = jupiter_price_result {
+        all_prices.push(price.clone());
+        if latest_timestamp.is_none() || price.timestamp > latest_timestamp.unwrap() {
+            latest_timestamp = Some(price.timestamp);
+        }
+    }
+
+    // Add Coinbase price for visual reference (not stored in database)
+    if let Ok(Some(price)) = coinbase_price_result {
+        all_prices.push(price.clone());
+        if latest_timestamp.is_none() || price.timestamp > latest_timestamp.unwrap() {
+            latest_timestamp = Some(price.timestamp);
+        }
+    }
+    
+    dashboard_data.latest_prices = all_prices;
+    dashboard_data.system_status.last_price_update = latest_timestamp;
+    
+    // Check if price feed is running (any source updated within 5 minutes)
+    if let Some(timestamp) = latest_timestamp {
+        let five_minutes_ago = Utc::now() - chrono::Duration::minutes(5);
+        dashboard_data.system_status.price_feed_running = timestamp > five_minutes_ago;
+    }
+
+    // Process indicators
+    if let Ok(Some(indicator)) = indicators_result {
+        dashboard_data.latest_indicators = vec![indicator];
+    }
+
+    // Process signals
+    if let Ok(signals) = signals_result {
+        // Calculate market sentiment efficiently
+        let four_hours_ago = Utc::now() - chrono::Duration::hours(4);
+        let (bullish_count, bearish_count) = signals.iter()
+            .filter(|s| s.timestamp > four_hours_ago)
+            .fold((0, 0), |(bull, bear), s| {
+                match s.signal_type.to_lowercase().as_str() {
+                    "buy" => (bull + 1, bear),
+                    "sell" => (bull, bear + 1),
+                    _ => (bull, bear),
+                }
+            });
+        
+        dashboard_data.market_sentiment = match bullish_count.cmp(&bearish_count) {
+            std::cmp::Ordering::Greater => format!("🐂 Bullish ({} bullish, {} bearish signals)", bullish_count, bearish_count),
+            std::cmp::Ordering::Less => format!("🐻 Bearish ({} bullish, {} bearish signals)", bullish_count, bearish_count),
+            std::cmp::Ordering::Equal => format!("⚖️ Neutral ({} bullish, {} bearish signals)", bullish_count, bearish_count),
+        };
+        
+        dashboard_data.latest_signals = signals;
+        if let Some(latest_signal) = dashboard_data.latest_signals.first() {
+            dashboard_data.system_status.last_signal_generated = Some(latest_signal.timestamp);
+            let ten_minutes_ago = Utc::now() - chrono::Duration::minutes(10);
+            dashboard_data.system_status.trading_logic_running = latest_signal.timestamp > ten_minutes_ago;
+        }
+    }
+
+    // Process positions
+    if let Ok(positions) = positions_result {
+        dashboard_data.system_status.active_positions = positions.len() as i64;
+        dashboard_data.active_positions = positions;
+    }
+
+    // Process trades
+    if let Ok(trades) = trades_result {
+        dashboard_data.recent_trades = trades;
+    }
+
+    // Process performance
+    if let Ok(performance) = performance_result {
+        dashboard_data.performance = performance;
+    }
+
+    // Process price history and calculate changes efficiently
+    if let Ok(mut price_history) = price_history_result {
+        if !price_history.is_empty() {
+            // Sort once, in place
+            price_history.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+            
+            let current_price = price_history[0].price;
+            let now = Utc::now();
+            
+            // Find prices at different intervals efficiently
+            let target_times = [
+                (now - chrono::Duration::hours(1), "1h"),
+                (now - chrono::Duration::hours(4), "4h"),
+                (now - chrono::Duration::hours(12), "12h"),
+                (now - chrono::Duration::hours(24), "24h"),
+            ];
+            
+            let mut changes = [None; 4];
+            let mut target_idx = 0;
+            
+            for price in &price_history {
+                while target_idx < target_times.len() && price.timestamp <= target_times[target_idx].0 {
+                    if price.price > 0.0 && price.price != current_price {
+                        changes[target_idx] = Some(((current_price - price.price) / price.price) * 100.0);
                     }
+                    target_idx += 1;
+                }
+                if target_idx >= target_times.len() {
+                    break;
                 }
             }
+            
+            dashboard_data.price_changes = PriceChanges {
+                change_1h: changes[0],
+                change_4h: changes[1],
+                change_12h: changes[2],
+                change_24h: changes[3],
+            };
+            
+            dashboard_data.price_history = price_history;
         }
     }
 
-    // Fetch latest indicators
-    if let Ok(response) = client
-        .get(&format!("{}/indicators/SOL%2FUSDC", state.database_url))
-        .send()
-        .await
-    {
-        if let Ok(api_response) = response.json::<serde_json::Value>().await {
-            if let Some(indicator_data) = api_response["data"].as_object() {
-                // Create a TechnicalIndicator with the available data
-                let mut indicator = TechnicalIndicator {
-                    id: "latest".to_string(),
-                    pair: indicator_data["pair"].as_str().unwrap_or("SOL/USDC").to_string(),
-                    timestamp: chrono::Utc::now(),
-                    sma_20: indicator_data["sma_20"].as_f64(),
-                    sma_50: indicator_data["sma_50"].as_f64(),
-                    sma_200: indicator_data["sma_200"].as_f64(),
-                    rsi_14: indicator_data["rsi_14"].as_f64(),
-                    price_change_24h: indicator_data["price_change_24h"].as_f64(),
-                    price_change_percent_24h: indicator_data["price_change_percent_24h"].as_f64(),
-                    volatility_24h: indicator_data["volatility_24h"].as_f64(),
-                    current_price: indicator_data["current_price"].as_f64().unwrap_or(0.0),
-                    created_at: chrono::Utc::now(),
-                };
-                
-                // Parse timestamp if available
-                if let Some(timestamp_str) = indicator_data["timestamp"].as_str() {
-                    if let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(timestamp_str) {
-                        indicator.timestamp = timestamp.with_timezone(&chrono::Utc);
-                    }
-                }
-                
-                dashboard_data.latest_indicators = vec![indicator];
-            }
-        }
-    }
+    // Process health check
+    dashboard_data.system_status.database_connected = health_result.unwrap_or(false);
 
-    // Fetch latest signals
-    if let Ok(response) = client
-        .get(&format!("{}/signals/SOL%2FUSDC", state.database_url))
-        .send()
-        .await
-    {
-        if let Ok(api_response) = response.json::<serde_json::Value>().await {
-            if let Some(signals_array) = api_response["data"].as_array() {
-                if let Ok(signals) = serde_json::from_value::<Vec<TradingSignal>>(serde_json::Value::Array(signals_array.clone())) {
-                    // Calculate market sentiment based on signals from last 4 hours
-                    let four_hours_ago = chrono::Utc::now() - chrono::Duration::hours(4);
-                    let recent_signals = signals.iter()
-                        .filter(|s| s.timestamp > four_hours_ago)
-                        .collect::<Vec<_>>();
-                    let bullish_count = recent_signals.iter().filter(|s| s.signal_type.to_lowercase() == "buy").count();
-                    let bearish_count = recent_signals.iter().filter(|s| s.signal_type.to_lowercase() == "sell").count();
-                    
-                    if bullish_count > bearish_count {
-                        dashboard_data.market_sentiment = format!("🐂 Bullish ({} bullish, {} bearish signals)", bullish_count, bearish_count);
-                    } else if bearish_count > bullish_count {
-                        dashboard_data.market_sentiment = format!("🐻 Bearish ({} bullish, {} bearish signals)", bullish_count, bearish_count);
-                    } else {
-                        dashboard_data.market_sentiment = format!("⚖️ Neutral ({} bullish, {} bearish signals)", bullish_count, bearish_count);
-                    }
-                    
-                    dashboard_data.latest_signals = signals;
-                    if let Some(latest_signal) = dashboard_data.latest_signals.first() {
-                        dashboard_data.system_status.last_signal_generated = Some(latest_signal.timestamp);
-                        // Check if signal is recent (within last 10 minutes)
-                        let ten_minutes_ago = chrono::Utc::now() - chrono::Duration::minutes(10);
-                        dashboard_data.system_status.trading_logic_running = latest_signal.timestamp > ten_minutes_ago;
-                    }
-                }
-            }
-        }
-    }
-
-    // Fetch active positions
-    if let Ok(response) = client
-        .get(&format!("{}/positions/active", state.database_url))
-        .send()
-        .await
-    {
-        if let Ok(api_response) = response.json::<serde_json::Value>().await {
-            if let Some(positions_array) = api_response["data"].as_array() {
-                if let Ok(positions) = serde_json::from_value::<Vec<Position>>(serde_json::Value::Array(positions_array.clone())) {
-                    dashboard_data.active_positions = positions;
-                    dashboard_data.system_status.active_positions = dashboard_data.active_positions.len() as i64;
-                }
-            }
-        }
-    }
-
-    // Fetch recent trades
-    if let Ok(response) = client
-        .get(&format!("{}/trades/recent", state.database_url))
-        .send()
-        .await
-    {
-        if let Ok(api_response) = response.json::<serde_json::Value>().await {
-            if let Some(trades_array) = api_response["data"].as_array() {
-                if let Ok(trades) = serde_json::from_value::<Vec<Trade>>(serde_json::Value::Array(trades_array.clone())) {
-                    dashboard_data.recent_trades = trades;
-                }
-            }
-        }
-    }
-
-    // Fetch performance metrics
-    if let Ok(response) = client
-        .get(&format!("{}/performance/metrics", state.database_url))
-        .send()
-        .await
-    {
-        if let Ok(performance) = response.json::<PerformanceMetrics>().await {
-            dashboard_data.performance = performance;
-        }
-    }
-
-    // Fetch price history for chart (get 48 hours to ensure we have enough data for all time intervals)
-    if let Ok(response) = client
-        .get(&format!("{}/prices/SOL%2FUSDC/history?hours=48", state.database_url))
-        .send()
-        .await
-    {
-        if let Ok(api_response) = response.json::<serde_json::Value>().await {
-            if let Some(price_history_array) = api_response["data"].as_array() {
-                if let Ok(price_history) = serde_json::from_value::<Vec<PriceData>>(serde_json::Value::Array(price_history_array.clone())) {
-                    dashboard_data.price_history = price_history.clone();
-                    
-                    // Calculate price changes if we have enough data
-                    if price_history.len() > 0 {
-                        let current_price = price_history[0].price;
-                        let now = chrono::Utc::now();
-                        
-                        // Sort price history by timestamp (newest first) to ensure proper order
-                        let mut sorted_history = price_history.clone();
-                        sorted_history.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-                        
-                        // Find prices at different time intervals
-                        let target_1h = now - chrono::Duration::hours(1);
-                        let target_4h = now - chrono::Duration::hours(4);
-                        let target_12h = now - chrono::Duration::hours(12);
-                        let target_24h = now - chrono::Duration::hours(24);
-                        
-                        // Find the closest price to each target time
-                        let price_1h = sorted_history.iter()
-                            .filter(|p| p.timestamp <= target_1h)
-                            .next()
-                            .map(|p| p.price);
-                        let price_4h = sorted_history.iter()
-                            .filter(|p| p.timestamp <= target_4h)
-                            .next()
-                            .map(|p| p.price);
-                        let price_12h = sorted_history.iter()
-                            .filter(|p| p.timestamp <= target_12h)
-                            .next()
-                            .map(|p| p.price);
-                        let price_24h = sorted_history.iter()
-                            .filter(|p| p.timestamp <= target_24h)
-                            .next()
-                            .map(|p| p.price);
-                        
-                        dashboard_data.price_changes = PriceChanges {
-                            change_1h: price_1h.and_then(|p| if p > 0.0 && p != current_price { Some(((current_price - p) / p) * 100.0) } else { None }),
-                            change_4h: price_4h.and_then(|p| if p > 0.0 && p != current_price { Some(((current_price - p) / p) * 100.0) } else { None }),
-                            change_12h: price_12h.and_then(|p| if p > 0.0 && p != current_price { Some(((current_price - p) / p) * 100.0) } else { None }),
-                            change_24h: price_24h.and_then(|p| if p > 0.0 && p != current_price { Some(((current_price - p) / p) * 100.0) } else { None }),
-                        };
-                    }
-                }
-            }
-        }
-    }
-
-    // Check database connection
-    if let Ok(response) = client.get(&format!("{}/health", state.database_url)).send().await {
-        dashboard_data.system_status.database_connected = response.status().is_success();
-    }
-
-    // Check trading execution status from environment variable
+    // Check trading execution status
     let trading_execution_enabled = std::env::var("ENABLE_TRADING_EXECUTION")
         .unwrap_or_else(|_| "false".to_string())
         .parse::<bool>()
         .unwrap_or(false);
     dashboard_data.system_status.trading_execution_enabled = trading_execution_enabled;
 
-    // Count signals today
-    if let Ok(response) = client
-        .get(&format!("{}/signals/SOL%2FUSDC/count?hours=24", state.database_url))
+    // Process signals count
+    dashboard_data.system_status.total_signals_today = signals_count_result.unwrap_or(0);
+
+    dashboard_data
+}
+
+// Optimized parallel fetch functions
+async fn fetch_pyth_price(client: &reqwest::Client, database_url: &str) -> Result<Option<PriceData>, reqwest::Error> {
+    let response = client
+        .get(&format!("{}/prices/SOL%2FUSDC/latest?source=pyth", database_url))
+        .timeout(Duration::from_secs(5))
         .send()
-        .await
-    {
-        if let Ok(count_response) = response.json::<serde_json::Value>().await {
-            if let Some(count) = count_response["data"]["count"].as_i64() {
-                dashboard_data.system_status.total_signals_today = count;
+        .await?;
+    
+    if let Ok(api_response) = response.json::<serde_json::Value>().await {
+        if let Some(price_data) = api_response["data"].as_object() {
+            if let Ok(price) = serde_json::from_value::<PriceData>(serde_json::Value::Object(price_data.clone())) {
+                return Ok(Some(price));
             }
         }
     }
+    Ok(None)
+}
 
-    Ok(HttpResponse::Ok().json(dashboard_data))
+async fn fetch_jupiter_price(client: &reqwest::Client, database_url: &str) -> Result<Option<PriceData>, reqwest::Error> {
+    let response = client
+        .get(&format!("{}/prices/SOL%2FUSDC/latest?source=jupiter", database_url))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await?;
+    
+    if let Ok(api_response) = response.json::<serde_json::Value>().await {
+        if let Some(price_data) = api_response["data"].as_object() {
+            if let Ok(price) = serde_json::from_value::<PriceData>(serde_json::Value::Object(price_data.clone())) {
+                return Ok(Some(price));
+            }
+        }
+    }
+    Ok(None)
+}
+
+async fn fetch_coinbase_price_direct(client: &reqwest::Client) -> Result<Option<PriceData>, reqwest::Error> {
+    let response = client
+        .get("https://api.coinbase.com/v2/prices/SOL-USD/spot")
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await?;
+    
+    if response.status().is_success() {
+        if let Ok(api_response) = response.json::<serde_json::Value>().await {
+            if let Some(price_str) = api_response["data"]["amount"].as_str() {
+                if let Ok(price_float) = price_str.parse::<f64>() {
+                    let price_data = PriceData {
+                        id: format!("coinbase-{}", chrono::Utc::now().timestamp()),
+                        source: "coinbase".to_string(),
+                        pair: "SOL/USD".to_string(),
+                        price: price_float,
+                        timestamp: chrono::Utc::now(),
+                    };
+                    return Ok(Some(price_data));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+async fn fetch_indicators(client: &reqwest::Client, database_url: &str) -> Result<Option<TechnicalIndicator>, reqwest::Error> {
+    let response = client
+        .get(&format!("{}/indicators/SOL%2FUSDC", database_url))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await?;
+    
+    if let Ok(api_response) = response.json::<serde_json::Value>().await {
+        if let Some(indicator_data) = api_response["data"].as_object() {
+            let mut indicator = TechnicalIndicator {
+                id: "latest".to_string(),
+                pair: indicator_data["pair"].as_str().unwrap_or("SOL/USDC").to_string(),
+                timestamp: Utc::now(),
+                sma_20: indicator_data["sma_20"].as_f64(),
+                sma_50: indicator_data["sma_50"].as_f64(),
+                sma_200: indicator_data["sma_200"].as_f64(),
+                rsi_14: indicator_data["rsi_14"].as_f64(),
+                price_change_24h: indicator_data["price_change_24h"].as_f64(),
+                price_change_percent_24h: indicator_data["price_change_percent_24h"].as_f64(),
+                volatility_24h: indicator_data["volatility_24h"].as_f64(),
+                current_price: indicator_data["current_price"].as_f64().unwrap_or(0.0),
+                created_at: Utc::now(),
+            };
+            
+            if let Some(timestamp_str) = indicator_data["timestamp"].as_str() {
+                if let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(timestamp_str) {
+                    indicator.timestamp = timestamp.with_timezone(&chrono::Utc);
+                }
+            }
+            
+            return Ok(Some(indicator));
+        }
+    }
+    Ok(None)
+}
+
+async fn fetch_signals(client: &reqwest::Client, database_url: &str) -> Result<Vec<TradingSignal>, reqwest::Error> {
+    let response = client
+        .get(&format!("{}/signals/SOL%2FUSDC", database_url))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await?;
+    
+    if let Ok(api_response) = response.json::<serde_json::Value>().await {
+        if let Some(signals_array) = api_response["data"].as_array() {
+            if let Ok(signals) = serde_json::from_value::<Vec<TradingSignal>>(serde_json::Value::Array(signals_array.clone())) {
+                return Ok(signals);
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
+async fn fetch_positions(client: &reqwest::Client, database_url: &str) -> Result<Vec<Position>, reqwest::Error> {
+    let response = client
+        .get(&format!("{}/positions/active", database_url))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await?;
+    
+    if let Ok(api_response) = response.json::<serde_json::Value>().await {
+        if let Some(positions_array) = api_response["data"].as_array() {
+            if let Ok(positions) = serde_json::from_value::<Vec<Position>>(serde_json::Value::Array(positions_array.clone())) {
+                return Ok(positions);
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
+async fn fetch_trades(client: &reqwest::Client, database_url: &str) -> Result<Vec<Trade>, reqwest::Error> {
+    let response = client
+        .get(&format!("{}/trades/recent", database_url))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await?;
+    
+    if let Ok(api_response) = response.json::<serde_json::Value>().await {
+        if let Some(trades_array) = api_response["data"].as_array() {
+            if let Ok(trades) = serde_json::from_value::<Vec<Trade>>(serde_json::Value::Array(trades_array.clone())) {
+                return Ok(trades);
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
+async fn fetch_performance(client: &reqwest::Client, database_url: &str) -> Result<PerformanceMetrics, reqwest::Error> {
+    let response = client
+        .get(&format!("{}/performance/metrics", database_url))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await?;
+    
+    if let Ok(performance) = response.json::<PerformanceMetrics>().await {
+        return Ok(performance);
+    }
+    
+    Ok(PerformanceMetrics {
+        total_trades: 0,
+        winning_trades: 0,
+        losing_trades: 0,
+        win_rate: 0.0,
+        total_pnl: 0.0,
+        total_pnl_percent: 0.0,
+        avg_trade_pnl: 0.0,
+        max_drawdown: 0.0,
+        sharpe_ratio: 0.0,
+        total_volume: 0.0,
+    })
+}
+
+async fn fetch_price_history(client: &reqwest::Client, database_url: &str) -> Result<Vec<PriceData>, reqwest::Error> {
+    // Reduced from 48 hours to 12 hours for better performance
+    let response = client
+        .get(&format!("{}/prices/SOL%2FUSDC/history?hours=12", database_url))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await?;
+    
+    if let Ok(api_response) = response.json::<serde_json::Value>().await {
+        if let Some(price_history_array) = api_response["data"].as_array() {
+            if let Ok(price_history) = serde_json::from_value::<Vec<PriceData>>(serde_json::Value::Array(price_history_array.clone())) {
+                return Ok(price_history);
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
+async fn fetch_health(client: &reqwest::Client, database_url: &str) -> Result<bool, reqwest::Error> {
+    let response = client
+        .get(&format!("{}/health", database_url))
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await?;
+    Ok(response.status().is_success())
+}
+
+async fn fetch_signals_count(client: &reqwest::Client, database_url: &str) -> Result<i64, reqwest::Error> {
+    let response = client
+        .get(&format!("{}/signals/SOL%2FUSDC/count?hours=24", database_url))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await?;
+    
+    if let Ok(count_response) = response.json::<serde_json::Value>().await {
+        if let Some(count) = count_response["data"]["count"].as_i64() {
+            return Ok(count);
+        }
+    }
+    Ok(0)
 }
 
 struct DashboardStream {
-    state: web::Data<AppState>,
     interval: tokio::time::Interval,
 }
 
 struct PriceStream {
-    state: web::Data<AppState>,
     interval: tokio::time::Interval,
 }
 
@@ -432,11 +615,11 @@ impl Stream for DashboardStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.interval.poll_tick(cx).is_ready() {
-            // This is a simplified version - in a real implementation, you'd fetch fresh data
+            // For real-time trading signals, we send an update notification
             let data = serde_json::json!({
                 "type": "dashboard_update",
                 "timestamp": chrono::Utc::now().to_rfc3339(),
-                "message": "Dashboard data updated"
+                "message": "Trading signals updated - fetch latest data"
             });
             
             let json_str = data.to_string();
@@ -454,15 +637,11 @@ impl Stream for PriceStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.interval.poll_tick(cx).is_ready() {
-            let state = self.state.clone();
-            
-            // For now, we'll send a simple update message
-            // In a production system, you'd want to implement a proper async stream
-            // that can fetch and send real-time price data
+            // Real-time price updates every second (like coinbase)
             let data = serde_json::json!({
                 "type": "price_update",
                 "timestamp": chrono::Utc::now().to_rfc3339(),
-                "message": "Price data updated - fetch latest from /api/prices/latest"
+                "message": "Price updated - fetch latest from /api/dashboard"
             });
             
             let json_str = data.to_string();
@@ -475,10 +654,9 @@ impl Stream for PriceStream {
     }
 }
 
-async fn dashboard_stream(state: web::Data<AppState>) -> Result<HttpResponse> {
+async fn dashboard_stream(_state: web::Data<AppState>) -> Result<HttpResponse> {
     let stream = DashboardStream {
-        state,
-        interval: tokio::time::interval(tokio::time::Duration::from_secs(30)),
+        interval: tokio::time::interval(tokio::time::Duration::from_secs(15)), // Trading signals every 15 seconds
     };
 
     Ok(HttpResponse::Ok()
@@ -489,10 +667,9 @@ async fn dashboard_stream(state: web::Data<AppState>) -> Result<HttpResponse> {
         .streaming(stream))
 }
 
-async fn price_stream(state: web::Data<AppState>) -> Result<HttpResponse> {
+async fn price_stream(_state: web::Data<AppState>) -> Result<HttpResponse> {
     let stream = PriceStream {
-        state,
-        interval: tokio::time::interval(tokio::time::Duration::from_secs(1)), // Update every second
+        interval: tokio::time::interval(tokio::time::Duration::from_secs(1)), // Keep 1-second price updates
     };
 
     Ok(HttpResponse::Ok()
@@ -1226,6 +1403,95 @@ async fn index() -> Result<HttpResponse> {
             margin: 10px 0;
             border: 1px solid #ff6b6b;
         }
+
+        /* Exchange Prices Styles */
+        .exchange-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .exchange-card {
+            background: linear-gradient(145deg, #0a0a0a, #1a1a1a);
+            border: 1px solid #333333;
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .exchange-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+        }
+
+        .exchange-card.connected::before {
+            background: linear-gradient(90deg, #14f195, #9945ff);
+        }
+
+        .exchange-card.disconnected::before {
+            background: linear-gradient(90deg, #ff6b6b, #ff8e53);
+        }
+
+        .exchange-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.4);
+        }
+
+        .exchange-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            font-size: 0.9rem;
+        }
+
+        .exchange-icon {
+            font-size: 1.2rem;
+        }
+
+        .exchange-name {
+            font-weight: bold;
+            color: #9945ff;
+        }
+
+        .exchange-pair {
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        .exchange-price {
+            font-size: 1.4rem;
+            font-weight: bold;
+            color: #14f195;
+            margin: 8px 0;
+            text-shadow: 0 0 10px rgba(20, 241, 149, 0.3);
+        }
+
+        .exchange-card.disconnected .exchange-price {
+            color: #ff6b6b;
+            text-shadow: 0 0 10px rgba(255, 107, 107, 0.3);
+        }
+
+        .exchange-time {
+            font-size: 0.75rem;
+            color: #666;
+        }
+
+        .exchange-card.connected .exchange-time {
+            color: #14f195;
+        }
+
+        .exchange-card.disconnected .exchange-time {
+            color: #ff6b6b;
+        }
         
         @keyframes pulse {
             0%, 100% { opacity: 1; }
@@ -1366,6 +1632,7 @@ async fn index() -> Result<HttpResponse> {
                 });
                 
                 updateSystemStatus(data.system_status);
+                updateExchangePrices(data.latest_prices); // Add missing exchange prices update
                 updatePricePerformance(data.latest_prices, data.performance, data.price_changes);
                 updateTechnicalIndicators(data.latest_indicators);
                 updateLatestSignals(data.latest_signals, data.market_sentiment, data.price_changes);
@@ -1426,8 +1693,84 @@ async fn index() -> Result<HttpResponse> {
             `;
         }
 
+        function updateExchangePrices(prices) {
+            const container = document.getElementById('exchange-prices');
+            
+            if (!prices || prices.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; padding: 20px; color: #888;">
+                        No price data available
+                    </div>
+                `;
+                return;
+            }
+
+            // Group prices by source
+            const priceMap = {};
+            prices.forEach(price => {
+                priceMap[price.source.toLowerCase()] = price;
+            });
+
+            // Order: Coinbase, Pyth, Jupiter (live API first)
+            const sourceOrder = ['coinbase', 'pyth', 'jupiter'];
+            const sourceIcons = {
+                'pyth': '🔮',
+                'jupiter': '🪐',
+                'coinbase': '🟢'
+            };
+            const sourceNames = {
+                'pyth': 'Pyth',
+                'jupiter': 'Jupiter',
+                'coinbase': 'Coinbase'
+            };
+
+            let exchangeCards = '';
+            sourceOrder.forEach(source => {
+                const price = priceMap[source];
+                if (price) {
+                    const timestamp = new Date(price.timestamp);
+                    const isRecent = (Date.now() - timestamp.getTime()) < 5 * 60 * 1000; // 5 minutes
+                    const statusClass = isRecent ? 'connected' : 'disconnected';
+                    const pair = price.pair.replace('%2F', '/');
+                    const isLive = source === 'coinbase'; // Coinbase is live API
+                    
+                    exchangeCards += `
+                        <div class="exchange-card ${statusClass}">
+                            <div class="exchange-header">
+                                <span class="exchange-icon">${sourceIcons[source]}</span>
+                                <span class="exchange-name">${sourceNames[source]}${isLive ? ' 🔴 LIVE' : ''}</span>
+                                <span class="exchange-pair">${pair}</span>
+                            </div>
+                            <div class="exchange-price">$${price.price.toFixed(4)}</div>
+                            <div class="exchange-time">${timestamp.toLocaleTimeString()}</div>
+                        </div>
+                    `;
+                } else {
+                    exchangeCards += `
+                        <div class="exchange-card disconnected">
+                            <div class="exchange-header">
+                                <span class="exchange-icon">${sourceIcons[source]}</span>
+                                <span class="exchange-name">${sourceNames[source]}</span>
+                                <span class="exchange-pair">N/A</span>
+                            </div>
+                            <div class="exchange-price">No Data</div>
+                            <div class="exchange-time">Offline</div>
+                        </div>
+                    `;
+                }
+            });
+
+            container.innerHTML = `
+                <div class="exchange-grid">
+                    ${exchangeCards}
+                </div>
+            `;
+        }
+
         function updatePricePerformance(prices, performance, priceChanges) {
-            const latestPrice = prices[0];
+            // Find Pyth price specifically for Current Price & Performance
+            const pythPrice = prices.find(price => price.source.toLowerCase() === 'pyth');
+            const latestPrice = pythPrice || prices[0]; // Fallback to first price if Pyth not found
             const container = document.getElementById('price-performance');
             
             if (latestPrice) {
@@ -1913,27 +2256,36 @@ async fn index() -> Result<HttpResponse> {
                 });
 
                 if (closestSignal) {
-                    // Set color based on signal type
-                    let color;
-                    switch (closestSignal.signal_type.toLowerCase()) {
-                        case 'buy':
-                            color = '#14f195'; // Green for buy
-                            break;
-                        case 'sell':
-                            color = '#ff6b6b'; // Red for sell
-                            break;
-                        case 'hold':
-                            color = '#9945ff'; // Purple for hold
-                            break;
-                        default:
-                            color = '#9945ff'; // Default purple
-                    }
-                    pointColors.push(color);
-                    
-                    // Set size based on confidence (0.1 to 1.0 confidence = 2 to 8 pixels)
                     const confidence = closestSignal.confidence || 0;
-                    const size = Math.max(2, Math.min(8, 2 + (confidence * 6)));
-                    pointSizes.push(size);
+                    
+                    // Only show dots for signals with confidence > 25%
+                    if (confidence > 0.25) {
+                        // Set color based on signal type
+                        let color;
+                        switch (closestSignal.signal_type.toLowerCase()) {
+                            case 'buy':
+                                color = '#14f195'; // Green for buy
+                                break;
+                            case 'sell':
+                                color = '#ff6b6b'; // Red for sell
+                                break;
+                            case 'hold':
+                                color = '#9945ff'; // Purple for hold
+                                break;
+                            default:
+                                color = '#9945ff'; // Default purple
+                        }
+                        pointColors.push(color);
+                        
+                        // Enhanced size based on confidence (25% to 100% = 4 to 16 pixels)
+                        // Much larger range for better visibility
+                        const size = Math.max(4, Math.min(16, 4 + (confidence * 12)));
+                        pointSizes.push(size);
+                    } else {
+                        // No dot for low confidence signals
+                        pointColors.push('transparent');
+                        pointSizes.push(0);
+                    }
                 } else {
                     // Default color and size for points without signals
                     pointColors.push('#9945ff');
@@ -2481,6 +2833,7 @@ async fn main() -> std::io::Result<()> {
     let app_state = web::Data::new(AppState {
         database_url,
         cache: Arc::new(Mutex::new(HashMap::new())),
+        client: reqwest::Client::new(),
     });
 
     HttpServer::new(move || {
