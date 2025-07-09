@@ -576,9 +576,12 @@ impl TradingEngine {
     }
 
     async fn post_position(&self, position: &Position, take_profit: f64, stop_loss: f64) -> Result<()> {
+        // Get wallet address from Solana private key
+        let wallet_address = self.trading_executor.get_wallet_address()?;
+        
         // Create the correct request structure that the database service expects
         let create_position_request = serde_json::json!({
-            "wallet_address": "default", // You might want to get this from config
+            "wallet_address": wallet_address,
             "pair": self.config.trading_pair,
             "position_type": match position.position_type {
                 PositionType::Long => "long",

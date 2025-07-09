@@ -5,6 +5,7 @@ use std::env;
 use tracing::{info, warn, error};
 use tokio::process::Command;
 use std::path::Path;
+use solana_sdk::signature::Signer;
 
 #[derive(Debug, Clone)]
 pub struct TradingExecutor {
@@ -445,5 +446,27 @@ impl TradingExecutor {
 
     pub fn get_min_confidence_threshold(&self) -> f64 {
         self.min_confidence_threshold
+    }
+
+    pub fn get_wallet_address(&self) -> Result<String> {
+        // Convert private key to wallet address
+        let private_key = self.solana_private_key.trim();
+        let keypair_bytes = if private_key.starts_with('[') {
+            serde_json::from_str::<Vec<u8>>(private_key)
+                .map_err(|e| anyhow!("Invalid SOLANA_PRIVATE_KEY format: {}", e))?
+        } else {
+            bs58::decode(private_key)
+                .into_vec()
+                .map_err(|e| anyhow!("Invalid base58 private key: {}", e))?
+        };
+        
+        if keypair_bytes.len() != 64 {
+            return Err(anyhow!("Invalid private key length"));
+        }
+        
+        let keypair = solana_sdk::signature::Keypair::from_bytes(&keypair_bytes)
+            .map_err(|e| anyhow!("Failed to create keypair: {}", e))?;
+        
+        Ok(keypair.pubkey().to_string())
     }
 } 
