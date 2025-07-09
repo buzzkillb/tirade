@@ -252,43 +252,83 @@ impl TradingEngine {
     }
 
     async fn get_data_point_count(&self) -> Result<usize> {
-        let url = format!(
-            "{}/prices/{}/history?hours=24",
-            self.config.database_url,
-            urlencoding::encode(&self.config.trading_pair)
-        );
-
-        info!("🔍 Fetching data point count from: {}", url);
+        let url = format!("{}/prices/{}", self.config.database_url, self.config.trading_pair);
         
         let response = self.client.get(&url).send().await?;
         let api_response: crate::models::ApiResponse<Vec<PriceFeed>> = response.json().await?;
-
-        info!("📊 API Response - Success: {}, Data points: {}", api_response.success, api_response.data.len());
-
-        if api_response.success {
-            Ok(api_response.data.len())
-        } else {
-            warn!("⚠️ API call failed: {:?}", api_response.message);
-            Ok(0)
+        
+        match api_response {
+            crate::models::ApiResponse { success: true, data: Some(prices), .. } => {
+                info!("📊 API Response - Success: {}, Data points: {}", api_response.success, prices.len());
+                Ok(prices.len())
+            }
+            crate::models::ApiResponse { success: false, error: Some(e), .. } => {
+                warn!("⚠️ API call failed: {}", e);
+                Ok(0)
+            }
+            _ => {
+                warn!("⚠️ Unexpected API response format");
+                Ok(0)
+            }
         }
     }
 
     async fn fetch_price_history(&self) -> Result<Vec<PriceFeed>> {
-        // Fetch 30 days of data for multi-timeframe analysis
-        let url = format!(
-            "{}/prices/{}/history?hours=720", // 30 days = 720 hours
-            self.config.database_url,
-            urlencoding::encode(&self.config.trading_pair)
-        );
-
+        // Try to fetch 1-minute candles first for better analysis
+        let candle_url = format!("{}/candles/{}/1m?limit=200", 
+                                self.config.database_url, 
+                                self.config.trading_pair);
+        
+        let response = self.client.get(&candle_url).send().await?;
+        
+        if response.status().is_success() {
+            let api_response: crate::models::ApiResponse<Vec<crate::models::Candle>> = response.json().await?;
+            
+            match api_response {
+                crate::models::ApiResponse { success: true, data: Some(candles), .. } => {
+                    if !candles.is_empty() {
+                        info!("📊 Using {} 1-minute candles for analysis", candles.len());
+                        
+                        // Convert candles to PriceFeed format for compatibility
+                        let prices: Vec<PriceFeed> = candles.into_iter().map(|candle| PriceFeed {
+                            id: candle.id,
+                            source: "candle".to_string(),
+                            pair: candle.pair,
+                            price: candle.close, // Use close price for analysis
+                            timestamp: candle.timestamp,
+                        }).collect();
+                        
+                        return Ok(prices);
+                    }
+                }
+                _ => {
+                    debug!("No candle data available, falling back to raw prices");
+                }
+            }
+        }
+        
+        // Fallback to raw price data if candles are not available
+        let url = format!("{}/prices/{}", self.config.database_url, self.config.trading_pair);
+        
         let response = self.client.get(&url).send().await?;
+        
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("Failed to fetch price data: {}", response.status()));
+        }
+        
         let api_response: crate::models::ApiResponse<Vec<PriceFeed>> = response.json().await?;
-
-        if api_response.success {
-            info!("📊 Fetched {} price records for multi-timeframe analysis", api_response.data.len());
-            Ok(api_response.data)
-        } else {
-            Err(anyhow!("Failed to fetch price history: {:?}", api_response.message))
+        
+        match api_response {
+            crate::models::ApiResponse { success: true, data: Some(prices), .. } => {
+                info!("📊 Using {} raw price records for analysis", prices.len());
+                Ok(prices)
+            }
+            crate::models::ApiResponse { success: false, error: Some(e), .. } => {
+                Err(anyhow::anyhow!("API error: {}", e))
+            }
+            _ => {
+                Err(anyhow::anyhow!("Unexpected response format"))
+            }
         }
     }
 
@@ -302,10 +342,16 @@ impl TradingEngine {
         let response = self.client.get(&url).send().await?;
         let api_response: crate::models::ApiResponse<TechnicalIndicators> = response.json().await?;
 
-        if api_response.success {
-            Ok(api_response.data)
-        } else {
-            Err(anyhow!("Failed to fetch technical indicators: {:?}", api_response.message))
+        match api_response {
+            crate::models::ApiResponse { success: true, data: Some(indicators), .. } => {
+                Ok(indicators)
+            }
+            crate::models::ApiResponse { success: false, error: Some(e), .. } => {
+                Err(anyhow!("Failed to fetch technical indicators: {}", e))
+            }
+            _ => {
+                Err(anyhow!("Unexpected response format"))
+            }
         }
     }
 
@@ -992,8 +1038,8 @@ impl TradingEngine {
         if response.status().is_success() {
             let api_response: crate::models::ApiResponse<Option<PositionDb>> = response.json().await?;
             
-            if api_response.success {
-                if let Some(position_db) = api_response.data {
+            match api_response {
+                crate::models::ApiResponse { success: true, data: Some(Some(position_db)), .. } => {
                     let position = Position {
                         entry_price: position_db.entry_price,
                         entry_time: position_db.entry_time,
@@ -1004,12 +1050,18 @@ impl TradingEngine {
                         },
                     };
                     Ok(Some(position))
-                } else {
+                }
+                crate::models::ApiResponse { success: true, data: Some(None), .. } => {
                     Ok(None)
                 }
-            } else {
-                warn!("Failed to fetch open positions: {:?}", api_response.message);
-                Ok(None)
+                crate::models::ApiResponse { success: false, error: Some(e), .. } => {
+                    warn!("Failed to fetch open positions: {}", e);
+                    Ok(None)
+                }
+                _ => {
+                    warn!("Unexpected response format for open positions");
+                    Ok(None)
+                }
             }
         } else {
             warn!("Failed to fetch open positions: {}", response.status());
