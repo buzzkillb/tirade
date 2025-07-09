@@ -570,7 +570,7 @@ impl TradingEngine {
         };
         
         info!("");
-        info!("🎯 Trading Analysis Report");
+        info!("🎯 Enhanced Trading Analysis Report");
         info!("═══════════════════════════════════════════════════════════════");
         info!("  💰 Current Price: ${:.4}", current_price);
         
@@ -582,7 +582,7 @@ impl TradingEngine {
         info!("  📊 Data Points: {} | Signal: {:?}", price_count, signal.signal_type);
         info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
         
-        // Position status
+        // Position status with enhanced information
         if let Some(position) = &self.current_position {
             let pnl = self.calculate_pnl(current_price, position);
             let duration = Utc::now() - position.entry_time;
@@ -590,33 +590,134 @@ impl TradingEngine {
             
             info!("  📈 Active Position: {:?} | Entry: ${:.4}", position.position_type, position.entry_price);
             info!("  {} Unrealized PnL: {:.2}% | Duration: {}s", pnl_emoji, pnl * 100.0, duration.num_seconds());
+            
+            // Calculate distance to take profit and stop loss
+            let tp_distance = if pnl > 0.0 { signal.take_profit - pnl } else { signal.take_profit };
+            let sl_distance = if pnl < 0.0 { signal.stop_loss + pnl.abs() } else { signal.stop_loss };
+            
+            info!("  🎯 Take Profit: {:.2}% away | Stop Loss: {:.2}% away", 
+                  tp_distance * 100.0, sl_distance * 100.0);
         } else {
             info!("  💤 No active position");
         }
         
-        // Technical indicators
+        // Multi-timeframe technical indicators
         info!("");
-        info!("📈 Technical Indicators:");
+        info!("📈 Multi-Timeframe Technical Indicators:");
+        
+        // Short-term indicators (30 minutes)
+        let short_term_prices = self.get_recent_prices(prices, 30 * 60);
+        if short_term_prices.len() >= 20 {
+            let short_indicators = self.strategy.calculate_custom_indicators(&short_term_prices);
+            info!("  ⚡ Short-term (30m):");
+            if let Some(rsi) = short_indicators.rsi_fast {
+                let rsi_status = if rsi > 70.0 { "🔴 Overbought" } else if rsi < 30.0 { "🟢 Oversold" } else { "🟡 Neutral" };
+                info!("    📊 RSI: {:.2} {}", rsi, rsi_status);
+            }
+            if let Some(sma) = short_indicators.sma_short {
+                let sma_status = if current_price > sma { "📈 Above" } else { "📉 Below" };
+                info!("    📈 SMA20: {:.4} {}", sma, sma_status);
+            }
+            if let Some(vol) = short_indicators.volatility {
+                let vol_status = if vol > 0.05 { "🔥 High" } else if vol > 0.02 { "⚡ Medium" } else { "❄️ Low" };
+                info!("    📊 Volatility: {:.2}% {}", vol * 100.0, vol_status);
+            }
+        }
+        
+        // Medium-term indicators (2 hours)
+        let medium_term_prices = self.get_recent_prices(prices, 2 * 60 * 60);
+        if medium_term_prices.len() >= 50 {
+            let medium_indicators = self.strategy.calculate_custom_indicators(&medium_term_prices);
+            info!("  📊 Medium-term (2h):");
+            if let Some(rsi) = medium_indicators.rsi_fast {
+                let rsi_status = if rsi > 70.0 { "🔴 Overbought" } else if rsi < 30.0 { "🟢 Oversold" } else { "🟡 Neutral" };
+                info!("    📊 RSI: {:.2} {}", rsi, rsi_status);
+            }
+            if let Some(sma) = medium_indicators.sma_long {
+                let sma_status = if current_price > sma { "📈 Above" } else { "📉 Below" };
+                info!("    📈 SMA50: {:.4} {}", sma, sma_status);
+            }
+        }
+        
+        // Long-term indicators (6 hours)
+        let long_term_prices = self.get_recent_prices(prices, 6 * 60 * 60);
+        if long_term_prices.len() >= 100 {
+            let long_indicators = self.strategy.calculate_custom_indicators(&long_term_prices);
+            info!("  📈 Long-term (6h):");
+            if let Some(rsi) = long_indicators.rsi_fast {
+                let rsi_status = if rsi > 70.0 { "🔴 Overbought" } else if rsi < 30.0 { "🟢 Oversold" } else { "🟡 Neutral" };
+                info!("    📊 RSI: {:.2} {}", rsi, rsi_status);
+            }
+            if let Some(sma) = long_indicators.sma_long {
+                let sma_status = if current_price > sma { "📈 Above" } else { "📉 Below" };
+                info!("    📈 SMA50: {:.4} {}", sma, sma_status);
+            }
+        }
+        
+        // Current timeframe indicators (from database)
+        info!("  📊 Current timeframe:");
         if let Some(rsi) = indicators.rsi_14 {
             let rsi_status = if rsi > 70.0 { "🔴 Overbought" } else if rsi < 30.0 { "🟢 Oversold" } else { "🟡 Neutral" };
-            info!("  📊 RSI (14): {:.2} {}", rsi, rsi_status);
+            info!("    📊 RSI (14): {:.2} {}", rsi, rsi_status);
         }
         if let Some(sma_20) = indicators.sma_20 {
             let sma_status = if current_price > sma_20 { "📈 Above" } else { "📉 Below" };
-            info!("  📈 SMA (20): {:.4} {}", sma_20, sma_status);
+            info!("    📈 SMA (20): {:.4} {}", sma_20, sma_status);
+        }
+        if let Some(sma_50) = indicators.sma_50 {
+            let sma_status = if current_price > sma_50 { "📈 Above" } else { "📉 Below" };
+            info!("    📈 SMA (50): {:.4} {}", sma_50, sma_status);
         }
         if let Some(volatility) = indicators.volatility_24h {
             let vol_status = if volatility > 0.05 { "🔥 High" } else if volatility > 0.02 { "⚡ Medium" } else { "❄️ Low" };
-            info!("  📊 Volatility (24h): {:.2}% {}", volatility * 100.0, vol_status);
+            info!("    📊 Volatility (24h): {:.2}% {}", volatility * 100.0, vol_status);
         }
         if let Some(price_change_24h) = indicators.price_change_24h {
             let change_emoji = if price_change_24h > 0.0 { "📈" } else if price_change_24h < 0.0 { "📉" } else { "➡️" };
-            info!("  {} 24h Change: {:.2}%", change_emoji, price_change_24h * 100.0);
+            info!("    {} 24h Change: {:.2}%", change_emoji, price_change_24h * 100.0);
         }
         
-        // Signal reasoning
+        // Market regime and trend analysis
         info!("");
-        info!("🧠 Signal Analysis:");
+        info!("🎭 Market Analysis:");
+        
+        // Calculate market regime
+        let (market_regime, trend_strength) = self.analyze_market_regime(prices);
+        let regime_emoji = match market_regime.as_str() {
+            "Trending" => "📈",
+            "Ranging" => "🔄", 
+            "Volatile" => "⚡",
+            "Consolidating" => "🦀",
+            _ => "❓"
+        };
+        info!("  {} Market Regime: {} (Strength: {:.1}%)", regime_emoji, market_regime, trend_strength * 100.0);
+        
+        // Support and resistance levels
+        let (support, resistance) = self.calculate_support_resistance(prices);
+        if let Some(support_level) = support {
+            let support_distance = ((current_price - support_level) / current_price) * 100.0;
+            let support_emoji = if support_distance < 2.0 { "🟢" } else if support_distance < 5.0 { "🟡" } else { "🔴" };
+            info!("  {} Support Level: ${:.4} ({:.1}% away)", support_emoji, support_level, support_distance);
+        }
+        if let Some(resistance_level) = resistance {
+            let resistance_distance = ((resistance_level - current_price) / current_price) * 100.0;
+            let resistance_emoji = if resistance_distance < 2.0 { "🟢" } else if resistance_distance < 5.0 { "🟡" } else { "🔴" };
+            info!("  {} Resistance Level: ${:.4} ({:.1}% away)", resistance_emoji, resistance_level, resistance_distance);
+        }
+        
+        // Dynamic thresholds
+        let dynamic_thresholds = self.calculate_dynamic_thresholds(prices);
+        info!("  🎯 Dynamic Thresholds:");
+        info!("    RSI Oversold: {:.1} | RSI Overbought: {:.1}", 
+              dynamic_thresholds.rsi_oversold, dynamic_thresholds.rsi_overbought);
+        info!("    Take Profit: {:.2}% | Stop Loss: {:.2}%", 
+              dynamic_thresholds.take_profit * 100.0, dynamic_thresholds.stop_loss * 100.0);
+        info!("    Momentum Threshold: {:.2}% | Volatility Multiplier: {:.1}x", 
+              dynamic_thresholds.momentum_threshold * 100.0, dynamic_thresholds.volatility_multiplier);
+        
+        // Enhanced signal reasoning
+        info!("");
+        info!("🧠 Enhanced Signal Analysis:");
         if signal.reasoning.is_empty() {
             info!("  💭 No specific reasoning available");
         } else {
@@ -625,7 +726,23 @@ impl TradingEngine {
             }
         }
         
-        // Market sentiment based on indicators
+        // Risk assessment
+        info!("");
+        info!("⚠️ Risk Assessment:");
+        let volatility_risk = indicators.volatility_24h.unwrap_or(0.02);
+        let risk_level = if volatility_risk > 0.08 { "🔴 High" } else if volatility_risk > 0.04 { "🟡 Medium" } else { "🟢 Low" };
+        info!("  📊 Volatility Risk: {} ({:.2}%)", risk_level, volatility_risk * 100.0);
+        
+        if let Some(position) = &self.current_position {
+            let pnl = self.calculate_pnl(current_price, position);
+            let risk_reward_ratio = if pnl > 0.0 { signal.take_profit / pnl.abs() } else { signal.take_profit / signal.stop_loss };
+            info!("  ⚖️ Risk/Reward Ratio: {:.2}:1", risk_reward_ratio);
+            
+            let max_drawdown_potential = signal.stop_loss * 100.0;
+            info!("  📉 Max Drawdown Potential: {:.2}%", max_drawdown_potential);
+        }
+        
+        // Market sentiment based on multiple indicators
         let mut bullish_signals = 0;
         let mut bearish_signals = 0;
         
@@ -637,6 +754,10 @@ impl TradingEngine {
             if current_price > sma_20 { bullish_signals += 1; }
             if current_price < sma_20 { bearish_signals += 1; }
         }
+        if let Some(sma_50) = indicators.sma_50 {
+            if current_price > sma_50 { bullish_signals += 1; }
+            if current_price < sma_50 { bearish_signals += 1; }
+        }
         
         let sentiment = if bullish_signals > bearish_signals { "🐂 Bullish" } 
                        else if bearish_signals > bullish_signals { "🐻 Bearish" } 
@@ -644,6 +765,21 @@ impl TradingEngine {
         
         info!("  🎭 Market Sentiment: {} ({} bullish, {} bearish signals)", 
               sentiment, bullish_signals, bearish_signals);
+        
+        // Performance context
+        info!("");
+        info!("📊 Performance Context:");
+        let signal_strength = if signal.confidence > 0.7 { "🟢 Strong" } else if signal.confidence > 0.5 { "🟡 Moderate" } else { "🔴 Weak" };
+        info!("  🎯 Signal Strength: {} ({:.1}%)", signal_strength, signal.confidence * 100.0);
+        
+        let market_condition = match market_regime.as_str() {
+            "Trending" => "📈 Favorable for trend following",
+            "Ranging" => "🔄 Favorable for mean reversion", 
+            "Volatile" => "⚡ High risk, high reward",
+            "Consolidating" => "🦀 Low volatility, wait for breakout",
+            _ => "❓ Unknown market condition"
+        };
+        info!("  🌍 Market Condition: {}", market_condition);
         
         info!("═══════════════════════════════════════════════════════════════");
         info!("");
@@ -1116,5 +1252,119 @@ impl TradingEngine {
         }
         
         Ok(())
+    }
+
+    // Helper functions for enhanced analysis
+    fn get_recent_prices(&self, prices: &[PriceFeed], seconds_back: u64) -> Vec<PriceFeed> {
+        let cutoff_time = Utc::now() - chrono::Duration::seconds(seconds_back as i64);
+        prices.iter()
+            .filter(|p| p.timestamp >= cutoff_time)
+            .cloned()
+            .collect()
+    }
+
+    fn analyze_market_regime(&self, prices: &[PriceFeed]) -> (String, f64) {
+        if prices.len() < 50 {
+            return ("Consolidating".to_string(), 0.0);
+        }
+
+        let price_values: Vec<f64> = prices.iter().map(|p| p.price).collect();
+        
+        // Calculate trend strength using linear regression
+        let trend_strength = self.calculate_trend_strength(&price_values);
+        
+        // Calculate price range and volatility
+        let min_price = price_values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max_price = price_values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let price_range = (max_price - min_price) / min_price;
+        let volatility = self.calculate_volatility(&price_values, 20).unwrap_or(0.02);
+        
+        // Determine market regime
+        let regime = if trend_strength > 0.7 && price_range > 0.1 {
+            "Trending"
+        } else if volatility > 0.05 {
+            "Volatile"
+        } else if price_range < 0.05 {
+            "Consolidating"
+        } else {
+            "Ranging"
+        };
+        
+        (regime.to_string(), trend_strength)
+    }
+
+    fn calculate_trend_strength(&self, prices: &[f64]) -> f64 {
+        if prices.len() < 20 {
+            return 0.0;
+        }
+        
+        let n = prices.len() as f64;
+        let x_values: Vec<f64> = (0..prices.len()).map(|i| i as f64).collect();
+        let y_values = prices.to_vec();
+        
+        let sum_x: f64 = x_values.iter().sum();
+        let sum_y: f64 = y_values.iter().sum();
+        let sum_xy: f64 = x_values.iter().zip(y_values.iter()).map(|(x, y)| x * y).sum();
+        let sum_x2: f64 = x_values.iter().map(|x| x * x).sum();
+        
+        let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x * sum_x);
+        let avg_price = sum_y / n;
+        
+        // Normalize slope by average price to get percentage change
+        let trend_strength = (slope / avg_price).abs();
+        trend_strength.min(1.0) // Cap at 100%
+    }
+
+    fn calculate_support_resistance(&self, prices: &[PriceFeed]) -> (Option<f64>, Option<f64>) {
+        if prices.len() < 20 {
+            return (None, None);
+        }
+        
+        let price_values: Vec<f64> = prices.iter().map(|p| p.price).collect();
+        let current_price = price_values.last().unwrap();
+        
+        // Simple support/resistance calculation using recent highs and lows
+        let recent_prices = &price_values[price_values.len().saturating_sub(20)..];
+        let min_price = recent_prices.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max_price = recent_prices.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        
+        let support = if min_price < *current_price { Some(min_price) } else { None };
+        let resistance = if max_price > *current_price { Some(max_price) } else { None };
+        
+        (support, resistance)
+    }
+
+    fn calculate_volatility(&self, prices: &[f64], window: usize) -> Option<f64> {
+        if prices.len() < window {
+            return None;
+        }
+        
+        let returns: Vec<f64> = prices.windows(2)
+            .map(|w| (w[1] - w[0]) / w[0])
+            .collect();
+        
+        let mean = returns.iter().sum::<f64>() / returns.len() as f64;
+        let variance = returns.iter()
+            .map(|r| (r - mean).powi(2))
+            .sum::<f64>() / returns.len() as f64;
+        
+        Some(variance.sqrt())
+    }
+
+    fn calculate_dynamic_thresholds(&self, prices: &[PriceFeed]) -> crate::strategy::DynamicThresholds {
+        // This is a simplified version - in practice, you'd want to use the strategy's method
+        // For now, return reasonable defaults
+        crate::strategy::DynamicThresholds {
+            rsi_oversold: 30.0,
+            rsi_overbought: 70.0,
+            take_profit: 0.05, // 5%
+            stop_loss: 0.03,    // 3%
+            momentum_threshold: 0.02, // 2%
+            volatility_multiplier: 1.5,
+            market_regime: crate::strategy::MarketRegime::Ranging,
+            trend_strength: 0.5,
+            support_level: None,
+            resistance_level: None,
+        }
     }
 } 
