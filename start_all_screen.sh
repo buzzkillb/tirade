@@ -60,6 +60,56 @@ fi
 # Create logs directory if it doesn't exist
 mkdir -p logs
 
+# Build all necessary binaries
+print_status "Building all required binaries..."
+
+# Build transaction binary
+print_status "Building transaction binary..."
+cd solana-trading-bot
+if ! cargo build --bin transaction --quiet; then
+    print_error "Failed to build transaction binary"
+    exit 1
+fi
+cd ..
+
+# Build database service
+print_status "Building database service..."
+cd database-service
+if ! cargo build --quiet; then
+    print_error "Failed to build database service"
+    exit 1
+fi
+cd ..
+
+# Build price feed
+print_status "Building price feed..."
+cd price-feed
+if ! cargo build --quiet; then
+    print_error "Failed to build price feed"
+    exit 1
+fi
+cd ..
+
+# Build trading logic
+print_status "Building trading logic..."
+cd trading-logic
+if ! cargo build --quiet; then
+    print_error "Failed to build trading logic"
+    exit 1
+fi
+cd ..
+
+# Build dashboard
+print_status "Building dashboard..."
+cd dashboard
+if ! cargo build --quiet; then
+    print_error "Failed to build dashboard"
+    exit 1
+fi
+cd ..
+
+print_success "All binaries built successfully"
+
 # Function to check if a screen session exists
 screen_exists() {
     local session_name=$1
@@ -153,8 +203,8 @@ start_service_in_screen "Price Feed" "tirade-price" "price-feed" \
 
 # Start trading logic
 print_status "Starting trading logic..."
-start_service_in_screen "Trading Logic" "tirade-trading" "." \
-    "cargo run --bin trading-logic" "N/A"
+start_service_in_screen "Trading Logic" "tirade-trading" "trading-logic" \
+    "cargo run" "N/A"
 
 # Start dashboard
 print_status "Starting dashboard..."
