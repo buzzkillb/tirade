@@ -102,7 +102,7 @@ pub struct SystemStatus {
     pub trading_execution_enabled: bool,
     pub last_price_update: Option<DateTime<Utc>>,
     pub last_signal_generated: Option<DateTime<Utc>>,
-    pub active_positions: i64,
+    pub active_position: bool,
     pub total_signals_today: i64,
 }
 
@@ -200,7 +200,7 @@ async fn fetch_fresh_dashboard_data(state: &web::Data<AppState>) -> DashboardDat
             trading_execution_enabled: false,
             last_price_update: None,
             last_signal_generated: None,
-            active_positions: 0,
+            active_position: false,
             total_signals_today: 0,
         },
         latest_prices: Vec::new(),
@@ -327,7 +327,7 @@ async fn fetch_fresh_dashboard_data(state: &web::Data<AppState>) -> DashboardDat
 
     // Process positions
     if let Ok(positions) = positions_result {
-        dashboard_data.system_status.active_positions = positions.len() as i64;
+        dashboard_data.system_status.active_position = !positions.is_empty();
         dashboard_data.active_positions = positions;
     }
 
@@ -1624,9 +1624,9 @@ async fn index() -> Result<HttpResponse> {
                     <div>⚡ Trading Execution</div>
                     <div>${status.trading_execution_enabled ? 'Enabled' : 'Disabled'}</div>
                 </div>
-                <div class="status-item">
-                    <div>📊 Active Positions</div>
-                    <div>${status.active_positions}</div>
+                <div class="status-item ${status.active_position ? 'connected' : 'disconnected'}">
+                    <div>📊 Active Position</div>
+                    <div>${status.active_position ? 'Yes' : 'No'}</div>
                 </div>
                 <div class="status-item">
                     <div>🎯 Signals Today</div>
