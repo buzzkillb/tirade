@@ -25,9 +25,13 @@ pub struct WalletBalance {
 
 impl TradingExecutor {
     pub fn new() -> Result<Self> {
-        // Load .env from project root
+        // Load .env from project root (two directories up from trading-logic)
         let project_root = std::env::current_dir()?;
-        let env_path = project_root.join(".env");
+        let env_path = if project_root.ends_with("trading-logic") {
+            project_root.join("..").join(".env")
+        } else {
+            project_root.join(".env")
+        };
         info!("TradingExecutor: Looking for .env file at: {:?}", env_path);
         dotenv::from_path(&env_path).ok();
         

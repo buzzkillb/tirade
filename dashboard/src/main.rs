@@ -748,9 +748,26 @@ async fn index() -> Result<HttpResponse> {
             box-shadow: 0 0 8px rgba(0, 0, 0, 0.3);
         }
 
+        /* Confidence-based dot sizes for legend demonstration */
         .buy-dot {
             background: #14f195;
             box-shadow: 0 0 8px rgba(20, 241, 149, 0.4);
+            width: 8px;
+            height: 8px;
+        }
+
+        .sell-dot {
+            background: #ff6b6b;
+            box-shadow: 0 0 8px rgba(255, 107, 107, 0.4);
+            width: 12px;
+            height: 12px;
+        }
+
+        .hold-dot {
+            background: #9945ff;
+            box-shadow: 0 0 8px rgba(153, 69, 255, 0.4);
+            width: 6px;
+            height: 6px;
         }
 
         .sell-dot {
@@ -1292,6 +1309,9 @@ async fn index() -> Result<HttpResponse> {
                     <div class="legend-item">
                         <span class="legend-dot hold-dot"></span>
                         <span>HOLD Signal</span>
+                    </div>
+                    <div class="legend-item">
+                        <span style="font-size: 0.8rem; color: #666;">💡 Larger dots = Higher confidence signals</span>
                     </div>
                 </div>
                 <canvas id="priceChart"></canvas>
@@ -1878,8 +1898,11 @@ async fn index() -> Result<HttpResponse> {
             gradient.addColorStop(0.5, 'rgba(20, 241, 149, 0.1)');
             gradient.addColorStop(1, 'rgba(0, 0, 0, 0.05)');
 
-            // Create signal-based dot colors
-            const pointColors = priceHistory.map(pricePoint => {
+            // Create signal-based dot colors and sizes
+            const pointColors = [];
+            const pointSizes = [];
+            
+            priceHistory.forEach(pricePoint => {
                 const priceTime = new Date(pricePoint.timestamp);
                 
                 // Find the closest signal to this price point (within 5 minutes)
@@ -1890,20 +1913,32 @@ async fn index() -> Result<HttpResponse> {
                 });
 
                 if (closestSignal) {
+                    // Set color based on signal type
+                    let color;
                     switch (closestSignal.signal_type.toLowerCase()) {
                         case 'buy':
-                            return '#14f195'; // Green for buy
+                            color = '#14f195'; // Green for buy
+                            break;
                         case 'sell':
-                            return '#ff6b6b'; // Red for sell
+                            color = '#ff6b6b'; // Red for sell
+                            break;
                         case 'hold':
-                            return '#9945ff'; // Purple for hold
+                            color = '#9945ff'; // Purple for hold
+                            break;
                         default:
-                            return '#9945ff'; // Default purple
+                            color = '#9945ff'; // Default purple
                     }
+                    pointColors.push(color);
+                    
+                    // Set size based on confidence (0.1 to 1.0 confidence = 2 to 8 pixels)
+                    const confidence = closestSignal.confidence || 0;
+                    const size = Math.max(2, Math.min(8, 2 + (confidence * 6)));
+                    pointSizes.push(size);
+                } else {
+                    // Default color and size for points without signals
+                    pointColors.push('#9945ff');
+                    pointSizes.push(2); // Small dots for points without signals
                 }
-                
-                // Default color for points without signals
-                return '#9945ff';
             });
 
             priceChart = new Chart(ctx, {
@@ -1921,8 +1956,11 @@ async fn index() -> Result<HttpResponse> {
                         pointBackgroundColor: pointColors,
                         pointBorderColor: '#0a0a0a',
                         pointBorderWidth: 2,
-                        pointRadius: 4,
-                        pointHoverRadius: 8,
+                        pointRadius: pointSizes,
+                        pointHoverRadius: function(context) {
+                            const index = context.dataIndex;
+                            return pointSizes[index] ? pointSizes[index] * 2 : 8;
+                        },
                         pointHoverBackgroundColor: '#14f195',
                         pointHoverBorderColor: '#0a0a0a',
                         pointHoverBorderWidth: 3
@@ -1949,10 +1987,14 @@ async fn index() -> Result<HttpResponse> {
                                     });
                                     
                                     if (signal) {
+                                        const confidencePercent = (signal.confidence * 100).toFixed(1);
+                                        const confidenceEmoji = signal.confidence >= 0.7 ? '🔥' : 
+                                                               signal.confidence >= 0.5 ? '⚡' : 
+                                                               signal.confidence >= 0.3 ? '💡' : '💭';
                                         return [
-                                            `Signal: ${signal.signal_type.toUpperCase()}`,
-                                            `Confidence: ${(signal.confidence * 100).toFixed(1)}%`,
-                                            `Reason: ${signal.reasoning}`
+                                            `${confidenceEmoji} Signal: ${signal.signal_type.toUpperCase()}`,
+                                            `🎯 Confidence: ${confidencePercent}%`,
+                                            `💭 Reason: ${signal.reasoning}`
                                         ];
                                     }
                                     return '';

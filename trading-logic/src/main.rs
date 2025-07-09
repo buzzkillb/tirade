@@ -16,9 +16,13 @@ async fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt::init();
     
-    // Load configuration from project root .env file
+    // Load configuration from project root .env file (two directories up from trading-logic)
     let project_root = std::env::current_dir()?;
-    let env_path = project_root.join(".env");
+    let env_path = if project_root.ends_with("trading-logic") {
+        project_root.join("..").join(".env")
+    } else {
+        project_root.join(".env")
+    };
     info!("Looking for .env file at: {:?}", env_path);
     dotenv::from_path(&env_path).ok();
     let config = Config::from_env()?;
