@@ -17,4 +17,4 @@ solana-sdk = "1.17"
 
 [[bin]]
 name = "test_simple_swap"
-path = "test_simple_swap.rs"
+path = "src/main.rs" 

@@ -19,9 +19,14 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
+        let mut database_url = env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "http://localhost:8080".to_string());
+        // If DATABASE_URL is a file path (SQLite), use the HTTP endpoint instead
+        if database_url.starts_with("sqlite:") || database_url.ends_with(".db") {
+            database_url = "http://localhost:8080".to_string();
+        }
         Ok(Self {
-            database_url: env::var("PRICE_FEED_DATABASE_URL")
-                .unwrap_or_else(|_| "http://localhost:8080".to_string()),
+            database_url,
             trading_pair: env::var("TRADING_PAIR")
                 .unwrap_or_else(|_| "SOL/USDC".to_string()),
             min_data_points: env::var("MIN_DATA_POINTS")

@@ -578,6 +578,20 @@ impl TradingEngine {
     async fn post_position(&self, position: &Position, take_profit: f64, stop_loss: f64) -> Result<()> {
         // Get wallet address from Solana private key
         let wallet_address = self.trading_executor.get_wallet_address()?;
+
+        // Ensure wallet exists in the database
+        let create_wallet_request = serde_json::json!({
+            "address": wallet_address,
+        });
+        let wallet_url = format!("{}/wallets", self.config.database_url);
+        let wallet_response = self.client.post(&wallet_url)
+            .json(&create_wallet_request)
+            .send()
+            .await?;
+        if !wallet_response.status().is_success() {
+            warn!("Failed to create wallet: {}", wallet_response.status());
+        }
+        // Continue regardless of wallet creation result (it may already exist)
         
         // Create the correct request structure that the database service expects
         let create_position_request = serde_json::json!({
