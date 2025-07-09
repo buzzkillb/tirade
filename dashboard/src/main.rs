@@ -1770,7 +1770,29 @@ async fn index() -> Result<HttpResponse> {
         function updatePricePerformance(prices, performance, priceChanges) {
             // Find Pyth price specifically for Current Price & Performance
             const pythPrice = prices.find(price => price.source.toLowerCase() === 'pyth');
-            const latestPrice = pythPrice || prices[0]; // Fallback to first price if Pyth not found
+            
+            // Only use Pyth price for Current Price & Performance section
+            // If Pyth is not available, show a message instead of falling back to other sources
+            if (!pythPrice) {
+                const container = document.getElementById('price-performance');
+                container.innerHTML = `
+                    <div class="metric">
+                        <span>Current Price:</span>
+                        <span class="metric-value" style="color: #ff6b6b;">
+                            Pyth price unavailable
+                            <span style="color: #ff6b6b; font-size: 0.8rem; margin-left: 8px;">⚠️</span>
+                        </span>
+                    </div>
+                    <div class="metric">
+                        <span>Status:</span>
+                        <span class="metric-value" style="color: #ff6b6b;">Waiting for Pyth data</span>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Use only Pyth price and match the exact formatting from Live Exchange Prices
+            const latestPrice = pythPrice;
             const container = document.getElementById('price-performance');
             
             if (latestPrice) {
@@ -1801,13 +1823,6 @@ async fn index() -> Result<HttpResponse> {
                 const changeSymbol = priceChange > 0 ? '📈' : priceChange < 0 ? '📉' : '➡️';
                 
                 container.innerHTML = `
-                    <div class="metric">
-                        <span>Current Price:</span>
-                        <span class="metric-value" id="current-price" style="position: relative;">
-                            $${latestPrice.price.toFixed(4)}
-                            <span style="color: #14f195; font-size: 0.8rem; margin-left: 8px; animation: pulse 1s ease-in-out infinite;">●</span>
-                        </span>
-                    </div>
                     <div class="metric">
                         <span>${timeLabel} Change:</span>
                         <span class="metric-value ${changeClass}" id="price-change">${changeSymbol} ${priceChange.toFixed(2)}%</span>
