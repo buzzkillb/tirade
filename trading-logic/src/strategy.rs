@@ -453,8 +453,8 @@ impl TradingStrategy {
         // Cap confidence at 1.0
         confidence = confidence.min(1.0_f64);
 
-        // Only generate signals if confidence is high enough (lowered threshold for more active trading)
-        if confidence < 0.25 {
+        // Only generate signals if confidence is high enough (increased threshold for more conservative trading)
+        if confidence < 0.45 {
             signal_type = SignalType::Hold;
             reasoning.push("Insufficient confidence for trade signal".to_string());
         }

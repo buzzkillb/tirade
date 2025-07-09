@@ -17,6 +17,7 @@ pub struct TradingEngine {
     current_position: Option<Position>,
     last_analysis_time: Option<chrono::DateTime<Utc>>,
     trading_executor: TradingExecutor,
+    last_signal_time: Option<chrono::DateTime<Utc>>, // Add signal cooldown tracking
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +49,7 @@ impl TradingEngine {
             current_position: None,
             last_analysis_time: None,
             trading_executor,
+            last_signal_time: None,
         })
     }
 
@@ -189,13 +191,59 @@ impl TradingEngine {
         // Step 4: Analyze and generate signal
         let signal = self.strategy.analyze(&prices, &consolidated_indicators);
 
-        // Step 4.5: Post trading signal to database
+        // Step 4.5: Check signal cooldown and position state to prevent multiple trades
+        let now = Utc::now();
+        let signal_cooldown_secs = 300; // 5 minutes cooldown between signals
+        
+        // STRICT RULE: No BUY signals if we already have a position
+        if signal.signal_type == SignalType::Buy && self.current_position.is_some() {
+            info!("🚫 BLOCKED: BUY signal ignored - already have a position");
+            info!("📊 Current position: {:?} at ${:.4}", 
+                  self.current_position.as_ref().unwrap().position_type,
+                  self.current_position.as_ref().unwrap().entry_price);
+            
+            // Still post the signal to database for monitoring, but don't execute
+            if let Err(e) = self.post_trading_signal(&signal).await {
+                warn!("Failed to post signal: {}", e);
+            }
+            
+            // Log the analysis but skip execution
+            self.log_analysis(&signal, &prices, &consolidated_indicators);
+            return Ok(());
+        }
+        
+        // Check signal cooldown for other signals
+        if let Some(last_signal) = self.last_signal_time {
+            let time_since_last_signal = now - last_signal;
+            if time_since_last_signal.num_seconds() < signal_cooldown_secs {
+                let remaining_cooldown = signal_cooldown_secs - time_since_last_signal.num_seconds();
+                debug!("⏰ Signal cooldown active: {}s remaining (signal: {:?}, confidence: {:.1}%)", 
+                       remaining_cooldown, signal.signal_type, signal.confidence * 100.0);
+                
+                // Still post the signal to database for monitoring, but don't execute
+                if let Err(e) = self.post_trading_signal(&signal).await {
+                    warn!("Failed to post signal: {}", e);
+                }
+                
+                // Log the analysis but skip execution
+                self.log_analysis(&signal, &prices, &consolidated_indicators);
+                return Ok(());
+            }
+        }
+
+        // Step 4.6: Post trading signal to database
         if let Err(e) = self.post_trading_signal(&signal).await {
             warn!("Failed to post signal: {}", e);
         }
 
         // Step 5: Execute trading logic
         self.execute_signal(&signal).await?;
+        
+        // Step 5.5: Update last signal time if signal was executed
+        if signal.signal_type != SignalType::Hold {
+            self.last_signal_time = Some(now);
+            info!("⏰ Signal cooldown started: Next signal allowed in {}s", signal_cooldown_secs);
+        }
 
         // Step 6: Log the analysis
         self.log_analysis(&signal, &prices, &consolidated_indicators);
@@ -264,6 +312,7 @@ impl TradingEngine {
     async fn execute_signal(&mut self, signal: &TradingSignal) -> Result<()> {
         match signal.signal_type {
             SignalType::Buy => {
+                // Double safety check - should never reach here if we already have a position
                 if self.current_position.is_none() {
                     info!("🟢 BUY signal detected - no current position, executing trade...");
                     // Execute the trade using trading executor
@@ -299,10 +348,11 @@ impl TradingEngine {
                         }
                     }
                 } else {
-                    info!("⚠️  BUY signal detected but already in position - ignoring signal");
+                    error!("🚫 CRITICAL: BUY signal reached execute_signal with existing position - this should never happen!");
                     info!("📊 Current position: {:?} at ${:.4}", 
                           self.current_position.as_ref().unwrap().position_type,
                           self.current_position.as_ref().unwrap().entry_price);
+                    info!("🛑 Blocking execution to prevent multiple positions");
                 }
             }
             SignalType::Sell => {
