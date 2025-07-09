@@ -77,16 +77,6 @@ impl TradingExecutor {
 
         let solana_private_key = env::var("SOLANA_PRIVATE_KEY")
             .map_err(|_| anyhow!("SOLANA_PRIVATE_KEY not found in environment"))?;
-        
-        // Convert JSON array format to base58 if needed
-        let solana_private_key = if solana_private_key.starts_with('[') {
-            // Parse JSON array and convert to base58
-            let key_bytes: Vec<u8> = serde_json::from_str(&solana_private_key)
-                .map_err(|e| anyhow!("Invalid SOLANA_PRIVATE_KEY format: {}", e))?;
-            bs58::encode(key_bytes).into_string()
-        } else {
-            solana_private_key
-        };
 
         // Determine transaction binary path - try environment variable first, then different locations
         let transaction_binary_path = if let Ok(env_path) = env::var("TRANSACTION_BINARY_PATH") {

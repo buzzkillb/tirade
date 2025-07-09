@@ -121,12 +121,13 @@ pub async fn execute_swap(
     // Deserialize as VersionedTransaction
     let mut transaction: VersionedTransaction = bincode::deserialize(&transaction_bytes)?;
     
-    // Get recent blockhash
-    let recent_blockhash = client.get_latest_blockhash()
-        .map_err(|e| TransactionError::SolanaRpc(format!("Failed to get blockhash: {}", e)))?;
-    // Manually sign the versioned transaction
+    // Sign the transaction properly
+    // The transaction from Jupiter already has the correct blockhash and structure
+    // We just need to sign it with our wallet
     let message_data = transaction.message.serialize();
     let signature = wallet.sign_message(&message_data);
+    
+    // Replace the first signature (which should be our wallet's signature)
     if !transaction.signatures.is_empty() {
         transaction.signatures[0] = signature;
     } else {

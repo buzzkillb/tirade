@@ -702,8 +702,7 @@ async fn index() -> Result<HttpResponse> {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TiRADE Dashboard</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='solana' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' style='stop-color:%239945ff;stop-opacity:1' /><stop offset='50%' style='stop-color:%2314f195;stop-opacity:1' /><stop offset='100%' style='stop-color:%239945ff;stop-opacity:1' /></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23solana)'/><text x='50' y='65' font-family='Arial, sans-serif' font-size='50' font-weight='bold' text-anchor='middle' fill='white'>T</text></svg>">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+
     <style>
         * {
             margin: 0;
@@ -925,70 +924,7 @@ async fn index() -> Result<HttpResponse> {
             position: relative;
         }
         
-        .price-chart canvas {
-            width: 100% !important;
-            height: 100% !important;
-        }
 
-        .chart-legend {
-            display: flex;
-            justify-content: center;
-            gap: 20px;
-            margin-bottom: 15px;
-            padding: 10px;
-            background: linear-gradient(145deg, #0a0a0a, #1a1a1a);
-            border-radius: 8px;
-            border: 1px solid #333333;
-        }
-
-        .legend-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            color: #ffffff;
-            font-size: 0.9rem;
-            font-weight: 500;
-        }
-
-        .legend-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            border: 2px solid #0a0a0a;
-            box-shadow: 0 0 8px rgba(0, 0, 0, 0.3);
-        }
-
-        /* Confidence-based dot sizes for legend demonstration */
-        .buy-dot {
-            background: #14f195;
-            box-shadow: 0 0 8px rgba(20, 241, 149, 0.4);
-            width: 8px;
-            height: 8px;
-        }
-
-        .sell-dot {
-            background: #ff6b6b;
-            box-shadow: 0 0 8px rgba(255, 107, 107, 0.4);
-            width: 12px;
-            height: 12px;
-        }
-
-        .hold-dot {
-            background: #9945ff;
-            box-shadow: 0 0 8px rgba(153, 69, 255, 0.4);
-            width: 6px;
-            height: 6px;
-        }
-
-        .sell-dot {
-            background: #ff6b6b;
-            box-shadow: 0 0 8px rgba(255, 107, 107, 0.4);
-        }
-
-        .hold-dot {
-            background: #9945ff;
-            box-shadow: 0 0 8px rgba(153, 69, 255, 0.4);
-        }
 
         .signal-item {
             padding: 10px;
@@ -1593,31 +1529,7 @@ async fn index() -> Result<HttpResponse> {
                 <div id="performance-metrics"></div>
             </div>
 
-            <!-- Price Chart -->
-            <div class="card price-chart">
-                <h3>📊 Price Chart (24h)</h3>
-                <div class="chart-legend">
-                    <div class="legend-item">
-                        <span class="legend-dot buy-dot"></span>
-                        <span>BUY Signal</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-dot sell-dot"></span>
-                        <span>SELL Signal</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-dot hold-dot"></span>
-                        <span>HOLD Signal</span>
-                    </div>
-                    <div class="legend-item">
-                        <span style="font-size: 0.8rem; color: #666;">💡 Larger dots = Higher confidence signals</span>
-                    </div>
-                    <div class="legend-item">
-                        <span style="font-size: 0.8rem; color: #666;">📈 Hover over dots for signal analysis</span>
-                    </div>
-                </div>
-                <canvas id="priceChart"></canvas>
-            </div>
+
 
             <!-- System Status -->
             <div class="card">
@@ -1636,9 +1548,7 @@ async fn index() -> Result<HttpResponse> {
     <button class="refresh-btn" onclick="loadDashboard()">🔄</button>
 
     <script>
-        let priceChart = null;
         let lastSignals = []; // Track previous signals to detect new ones
-        let lastSignalCount = 0; // Track signal count to detect new signals
 
         async function loadDashboard() {
             try {
@@ -1676,16 +1586,6 @@ async fn index() -> Result<HttpResponse> {
                 updateActivePositions(data.active_positions);
                 updateRecentTrades(data.recent_trades);
                 updatePerformanceMetrics(data.performance);
-                
-                // Only update chart if there are new signals (trading logic runs every 30 seconds)
-                const currentSignalCount = data.latest_signals ? data.latest_signals.length : 0;
-                if (currentSignalCount > lastSignalCount || !priceChart) {
-                    console.log(`Updating chart: ${currentSignalCount} signals (was ${lastSignalCount})`);
-                    updatePriceChart(data.price_history, data.latest_signals, data.active_positions);
-                    lastSignalCount = currentSignalCount;
-                } else {
-                    console.log(`Skipping chart update: no new signals (${currentSignalCount} signals)`);
-                }
 
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('dashboard').style.display = 'block';
@@ -2188,188 +2088,7 @@ async fn index() -> Result<HttpResponse> {
             `;
         }
 
-        function updatePriceChart(priceHistory, signals = [], activePositions = []) {
-            console.log('updatePriceChart called with', priceHistory.length, 'price points and', signals.length, 'signals');
-            if (!priceHistory || priceHistory.length === 0) {
-                console.error('No price history data provided');
-                return;
-            }
-            const canvas = document.getElementById('priceChart');
-            if (!canvas) {
-                console.error('Price chart canvas not found');
-                return;
-            }
-            const ctx = canvas.getContext('2d');
-            
-            // Sort signals by timestamp (newest first)
-            const sortedSignals = signals.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-            
-            // Filter signals by confidence (show all signals with confidence > 0.2)
-            const filteredSignals = sortedSignals.filter(signal => signal.confidence > 0.2);
-            
-            // Prepare chart data - use price history for the line, signals for dots
-            const labels = priceHistory.map(p => new Date(p.timestamp));
-            const prices = priceHistory.map(p => p.price);
-            const pointColors = [];
-            const pointSizes = [];
-            
-            // Initialize all points as transparent (no signal)
-            priceHistory.forEach(() => {
-                pointColors.push('transparent');
-                pointSizes.push(0);
-            });
-            
-            // Overlay signals on price points
-            priceHistory.forEach((pricePoint, index) => {
-                const priceTime = new Date(pricePoint.timestamp);
-                
-                // Find signals within 5 minutes of this price point
-                const nearbySignals = filteredSignals.filter(signal => {
-                    const signalTime = new Date(signal.timestamp);
-                    const timeDiff = Math.abs(priceTime - signalTime);
-                    return timeDiff <= 5 * 60 * 1000; // 5 minutes
-                });
-                
-                if (nearbySignals.length > 0) {
-                    // Use the highest confidence signal
-                    const bestSignal = nearbySignals.reduce((best, current) => 
-                        current.confidence > best.confidence ? current : best
-                    );
-                    
-                    let color;
-                    switch (bestSignal.signal_type.toLowerCase()) {
-                        case 'buy': color = '#14f195'; break;
-                        case 'sell': color = '#ff6b6b'; break;
-                        case 'hold': color = '#f7931a'; break;
-                        default: color = '#9945ff';
-                    }
-                    
-                    pointColors[index] = color;
-                    // Size based on confidence (6-20px)
-                    pointSizes[index] = Math.max(6, Math.min(20, 6 + (bestSignal.confidence * 14)));
-                }
-            });
-            // If chart exists, update in place
-            if (window.priceChart && window.priceChart.data && window.priceChart.data.datasets && window.priceChart.data.datasets[0]) {
-                try {
-                    window.priceChart.data.labels = labels;
-                    window.priceChart.data.datasets[0].data = prices;
-                    window.priceChart.data.datasets[0].pointBackgroundColor = pointColors;
-                    window.priceChart.data.datasets[0].pointRadius = pointSizes;
-                    window.priceChart.update('none'); // No animation
-                    return;
-                } catch (error) {
-                    console.error('Error updating existing chart:', error);
-                    // If update fails, destroy and recreate
-                    if (window.priceChart) {
-                        window.priceChart.destroy();
-                        window.priceChart = null;
-                    }
-                }
-            }
-            // Otherwise, create chart
-            try {
-                const gradient = ctx.createLinearGradient(0, 0, 0, 400);
-                gradient.addColorStop(0, 'rgba(153, 69, 255, 0.3)');
-                gradient.addColorStop(0.5, 'rgba(20, 241, 149, 0.1)');
-                gradient.addColorStop(1, 'rgba(0, 0, 0, 0.05)');
-                window.priceChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'SOL/USDC Price with Trading Signals',
-                        data: prices,
-                        borderColor: '#9945ff',
-                        backgroundColor: gradient,
-                        borderWidth: 3,
-                        fill: true,
-                        tension: 0.4,
-                        pointBackgroundColor: pointColors,
-                        pointBorderColor: '#0a0a0a',
-                        pointBorderWidth: 2,
-                        pointRadius: pointSizes,
-                        pointHoverRadius: function(context) {
-                            const index = context.dataIndex;
-                            return pointSizes[index] ? pointSizes[index] * 2 : 8;
-                        },
-                        pointHoverBackgroundColor: '#14f195',
-                        pointHoverBorderColor: '#0a0a0a',
-                        pointHoverBorderWidth: 3
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    animation: false,
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                afterBody: function(context) {
-                                    const dataIndex = context[0].dataIndex;
-                                    const priceTime = new Date(priceHistory[dataIndex].timestamp);
-                                    const pricePoint = priceHistory[dataIndex];
-                                    
-                                    // Find signals within 5 minutes of this price point
-                                    const nearbySignals = filteredSignals.filter(s => {
-                                        const signalTime = new Date(s.timestamp);
-                                        const timeDiff = Math.abs(priceTime - signalTime);
-                                        return timeDiff <= 5 * 60 * 1000;
-                                    });
-                                    
-                                    if (nearbySignals.length > 0) {
-                                        // Use the highest confidence signal
-                                        const signal = nearbySignals.reduce((best, current) => 
-                                            current.confidence > best.confidence ? current : best
-                                        );
-                                        
-                                        const confidencePercent = (signal.confidence * 100).toFixed(1);
-                                        const confidenceEmoji = signal.confidence >= 0.7 ? '🔥' : 
-                                                               signal.confidence >= 0.5 ? '⚡' : 
-                                                               signal.confidence >= 0.3 ? '💡' : '💭';
-                                        
-                                        const signalColor = signal.signal_type.toLowerCase() === 'buy' ? '#14f195' : 
-                                                           signal.signal_type.toLowerCase() === 'sell' ? '#ff6b6b' : '#f7931a';
-                                        
-                                        return [
-                                            `💰 Price: $${pricePoint.price.toFixed(4)}`,
-                                            `${confidenceEmoji} Signal: ${signal.signal_type.toUpperCase()}`,
-                                            `🎯 Confidence: ${confidencePercent}%`,
-                                            `💭 Analysis: ${signal.reasoning}`,
-                                            `⏰ Time: ${new Date(signal.timestamp).toLocaleString()}`
-                                        ];
-                                    }
-                                    
-                                    // If no signal, just show price info
-                                    return [
-                                        `💰 Price: $${pricePoint.price.toFixed(4)}`,
-                                        `⏰ Time: ${new Date(pricePoint.timestamp).toLocaleString()}`
-                                    ];
-                                }
-                            }
-                        }
-                    },
-                    scales: {
-                        x: {
-                            type: 'time',
-                            time: { unit: 'hour' },
-                            grid: { color: 'rgba(153, 69, 255, 0.1)', borderColor: 'rgba(153, 69, 255, 0.2)' },
-                            ticks: { color: '#9945ff', font: { size: 12, weight: '500' } }
-                        },
-                        y: {
-                            beginAtZero: false,
-                            grid: { color: 'rgba(20, 241, 149, 0.1)', borderColor: 'rgba(20, 241, 149, 0.2)' },
-                            ticks: { color: '#14f195', font: { size: 12, weight: '500' } }
-                        }
-                    }
-                }
-            });
-            } catch (error) {
-                console.error('Error creating chart:', error);
-                window.priceChart = null;
-            }
-        }
+
 
         // Real-time updates using Server-Sent Events
         const dashboardEventSource = new EventSource('/api/dashboard/stream');
@@ -2509,13 +2228,7 @@ async fn index() -> Result<HttpResponse> {
                                 notification.remove();
                             }, 3000);
                             
-                            // Update chart when new signal is detected
-                            console.log('New signal detected - updating chart');
-                            // Fetch fresh dashboard data to get updated price history and signals
-                            const dashboardResponse = await fetch('/api/dashboard');
-                            const dashboardData = await dashboardResponse.json();
-                            updatePriceChart(dashboardData.price_history, dashboardData.latest_signals, dashboardData.active_positions);
-                            lastSignalCount = dashboardData.latest_signals ? dashboardData.latest_signals.length : 0;
+
                         }
                         
                         // Update last signal timestamp

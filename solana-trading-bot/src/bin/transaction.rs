@@ -51,6 +51,11 @@ async fn main() -> Result<(), TransactionError> {
                           usdc_balance, args.amount_usdc)));
     }
     
+    // Check if we have enough SOL for transaction fees (at least 0.01 SOL)
+    if sol_balance < 0.01 {
+        return Err(TransactionError::Balance(format!("Insufficient SOL for transaction fees. Have: {:.6} SOL, Need at least 0.01 SOL", sol_balance)));
+    }
+    
     // Get quote from Jupiter
     let quote = get_jupiter_quote(&args, &config).await?;
     info!("Jupiter quote received:");
