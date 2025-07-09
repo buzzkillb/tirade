@@ -1087,11 +1087,20 @@ impl Database {
     }
 
     pub async fn get_recent_trades(&self, limit: i64) -> Result<Vec<crate::models::Trade>> {
+        // Since trades table is empty, return recent positions as trades
         let rows = sqlx::query(
             r#"
-            SELECT t.*, p.pair FROM trades t
-            JOIN positions p ON t.position_id = p.id
-            ORDER BY t.timestamp DESC
+            SELECT 
+                id,
+                pair,
+                position_type as trade_type,
+                entry_price as price,
+                quantity,
+                entry_time as timestamp,
+                created_at,
+                status
+            FROM positions 
+            ORDER BY entry_time DESC
             LIMIT ?
             "#,
         )
@@ -1109,7 +1118,7 @@ impl Database {
                 quantity: row.try_get("quantity").unwrap_or_default(),
                 total_value: row.try_get::<f64, _>("price").unwrap_or_default() * row.try_get::<f64, _>("quantity").unwrap_or_default(),
                 timestamp: row.try_get("timestamp").unwrap_or_default(),
-                status: "completed".to_string(),
+                status: row.try_get("status").unwrap_or_default(),
                 created_at: row.try_get("created_at").unwrap_or_default(),
             })
             .collect();
@@ -1191,9 +1200,44 @@ impl Database {
         // Calculate max drawdown (simplified)
         let max_drawdown = 0.0; // TODO: Implement proper drawdown calculation
 
-        // Calculate Sharpe ratio (simplified)
+        // Calculate proper Sharpe ratio
         let sharpe_ratio = if total_trades > 0 {
-            total_pnl / (total_trades as f64).sqrt()
+            // Get all PnL values for closed positions
+            let pnl_values: Vec<f64> = sqlx::query(
+                r#"
+                SELECT pnl FROM positions 
+                WHERE status = 'closed' AND pnl IS NOT NULL
+                ORDER BY exit_time ASC
+                "#,
+            )
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .filter_map(|row| row.try_get::<f64, _>("pnl").ok())
+            .collect();
+
+            if pnl_values.len() > 1 {
+                // Calculate average return
+                let avg_return = pnl_values.iter().sum::<f64>() / pnl_values.len() as f64;
+                
+                // Calculate standard deviation
+                let variance = pnl_values.iter()
+                    .map(|&x| (x - avg_return).powi(2))
+                    .sum::<f64>() / pnl_values.len() as f64;
+                let std_dev = variance.sqrt();
+                
+                // Risk-free rate (assume 0% for simplicity)
+                let risk_free_rate = 0.0;
+                
+                // Sharpe ratio = (avg_return - risk_free_rate) / std_dev
+                if std_dev > 0.0 {
+                    (avg_return - risk_free_rate) / std_dev
+                } else {
+                    0.0
+                }
+            } else {
+                0.0 // Need at least 2 trades for meaningful Sharpe ratio
+            }
         } else {
             0.0
         };

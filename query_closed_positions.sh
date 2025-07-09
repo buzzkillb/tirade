@@ -1,10 +1,21 @@
 #!/bin/bash
-sqlite3 data/trading_bot.db "\
+
+# Check if database file exists
+if [ ! -f "data/trading_bot.db" ]; then
+    echo "❌ Database file not found: data/trading_bot.db"
+    echo "Make sure the database service is running and has created the database file."
+    exit 1
+fi
+
+echo "📋 Closed Positions (Last 10)"
+echo "============================="
+
+sqlite3 data/trading_bot.db <<SQL_EOF
 .headers on
 .mode column
-SELECT id, pair, position_type, entry_price, exit_price, quantity, pnl, pnl_percent, status, created_at, exit_time \
-FROM positions \
-WHERE status = 'closed' \
-ORDER BY exit_time DESC \
-LIMIT 10;\
-" 
+SELECT id, pair, position_type, entry_price, exit_price, quantity, pnl, pnl_percent, status, created_at, exit_time
+FROM positions
+WHERE status = 'closed'
+ORDER BY exit_time DESC
+LIMIT 10;
+SQL_EOF 

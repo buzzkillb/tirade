@@ -73,8 +73,19 @@ impl TradingEngine {
         }
 
         // Recover positions from database
-        if let Err(e) = self.recover_positions().await {
-            warn!("Failed to recover positions: {}", e);
+        info!("🔄 Attempting to recover positions from database...");
+        match self.recover_positions().await {
+            Ok(_) => {
+                if self.current_position.is_some() {
+                    info!("✅ Successfully recovered existing position");
+                } else {
+                    info!("💤 No existing positions found - ready for new trades");
+                }
+            }
+            Err(e) => {
+                warn!("⚠️  Failed to recover positions: {}", e);
+                info!("🔄 Will retry position recovery on next cycle");
+            }
         }
 
         loop {
@@ -111,6 +122,14 @@ impl TradingEngine {
     }
 
     async fn trading_cycle(&mut self) -> Result<()> {
+        // Step 0: Retry position recovery if we don't have a position
+        if self.current_position.is_none() {
+            debug!("🔄 No current position detected, attempting recovery...");
+            if let Err(e) = self.recover_positions().await {
+                debug!("⚠️  Position recovery failed: {}", e);
+            }
+        }
+        
         // Step 1: Check if we have enough data
         let data_points = self.get_data_point_count().await?;
         if data_points < self.config.min_data_points {
@@ -240,6 +259,7 @@ impl TradingEngine {
         match signal.signal_type {
             SignalType::Buy => {
                 if self.current_position.is_none() {
+                    info!("🟢 BUY signal detected - no current position, executing trade...");
                     // Execute the trade using trading executor
                     match self.trading_executor.execute_signal(signal).await {
                         Ok(true) => {
@@ -273,7 +293,10 @@ impl TradingEngine {
                         }
                     }
                 } else {
-                    debug!("Already in position, ignoring BUY signal");
+                    info!("⚠️  BUY signal detected but already in position - ignoring signal");
+                    info!("📊 Current position: {:?} at ${:.4}", 
+                          self.current_position.as_ref().unwrap().position_type,
+                          self.current_position.as_ref().unwrap().entry_price);
                 }
             }
             SignalType::Sell => {
