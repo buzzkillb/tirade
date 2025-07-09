@@ -1638,6 +1638,7 @@ async fn index() -> Result<HttpResponse> {
     <script>
         let priceChart = null;
         let lastSignals = []; // Track previous signals to detect new ones
+        let lastSignalCount = 0; // Track signal count to detect new signals
 
         async function loadDashboard() {
             try {
@@ -1675,7 +1676,16 @@ async fn index() -> Result<HttpResponse> {
                 updateActivePositions(data.active_positions);
                 updateRecentTrades(data.recent_trades);
                 updatePerformanceMetrics(data.performance);
-                updatePriceChart(data.price_history, data.latest_signals, data.active_positions);
+                
+                // Only update chart if there are new signals (trading logic runs every 30 seconds)
+                const currentSignalCount = data.latest_signals ? data.latest_signals.length : 0;
+                if (currentSignalCount > lastSignalCount || !priceChart) {
+                    console.log(`Updating chart: ${currentSignalCount} signals (was ${lastSignalCount})`);
+                    updatePriceChart(data.price_history, data.latest_signals, data.active_positions);
+                    lastSignalCount = currentSignalCount;
+                } else {
+                    console.log(`Skipping chart update: no new signals (${currentSignalCount} signals)`);
+                }
 
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('dashboard').style.display = 'block';
@@ -2498,6 +2508,14 @@ async fn index() -> Result<HttpResponse> {
                             setTimeout(() => {
                                 notification.remove();
                             }, 3000);
+                            
+                            // Update chart when new signal is detected
+                            console.log('New signal detected - updating chart');
+                            // Fetch fresh dashboard data to get updated price history and signals
+                            const dashboardResponse = await fetch('/api/dashboard');
+                            const dashboardData = await dashboardResponse.json();
+                            updatePriceChart(dashboardData.price_history, dashboardData.latest_signals, dashboardData.active_positions);
+                            lastSignalCount = dashboardData.latest_signals ? dashboardData.latest_signals.length : 0;
                         }
                         
                         // Update last signal timestamp
@@ -2685,8 +2703,8 @@ async fn index() -> Result<HttpResponse> {
         // Update exchange prices every 1 second
         setInterval(updateExchangePrices, 1000);
         
-        // Update signals every 3 seconds for real-time updates
-        setInterval(updateSignals, 3000);
+        // Update signals every 10 seconds (trading logic runs every 30 seconds)
+        setInterval(updateSignals, 10000);
         
         // Initial fetch
         updateExchangePrices();
