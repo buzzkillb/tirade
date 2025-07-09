@@ -172,16 +172,22 @@ impl TradingEngine {
             return Ok(());
         }
 
-        // Step 3: Fetch technical indicators
-        let indicators = self.fetch_technical_indicators().await?;
+        // Step 3: Calculate strategy indicators from price data
+        let strategy_indicators = self.strategy.calculate_custom_indicators(&prices);
 
-        // Step 3.5: Post all technical indicators to database
-        if let Err(e) = self.post_all_indicators(&indicators).await {
-            warn!("Failed to post indicators: {}", e);
+        // Step 3.5: Calculate and post consolidated technical indicators for dashboard
+        let consolidated_indicators = self.calculate_consolidated_indicators(&prices, &strategy_indicators);
+        if let Err(e) = self.post_consolidated_indicators(&consolidated_indicators).await {
+            warn!("Failed to post consolidated indicators: {}", e);
+        }
+
+        // Step 3.6: Post individual indicators for backward compatibility
+        if let Err(e) = self.post_all_indicators(&consolidated_indicators).await {
+            warn!("Failed to post individual indicators: {}", e);
         }
 
         // Step 4: Analyze and generate signal
-        let signal = self.strategy.analyze(&prices, &indicators);
+        let signal = self.strategy.analyze(&prices, &consolidated_indicators);
 
         // Step 4.5: Post trading signal to database
         if let Err(e) = self.post_trading_signal(&signal).await {
@@ -192,7 +198,7 @@ impl TradingEngine {
         self.execute_signal(&signal).await?;
 
         // Step 6: Log the analysis
-        self.log_analysis(&signal, &prices, &indicators);
+        self.log_analysis(&signal, &prices, &consolidated_indicators);
 
         Ok(())
     }
@@ -534,7 +540,154 @@ impl TradingEngine {
         info!("");
     }
 
+    fn calculate_consolidated_indicators(&self, prices: &[PriceFeed], strategy_indicators: &crate::models::TradingIndicators) -> crate::models::TechnicalIndicators {
+        let current_price = prices.last().map(|p| p.price).unwrap_or(0.0);
+        let now = Utc::now();
+        
+        // Calculate RSI14 (dashboard expects RSI14, not RSI7/21)
+        let rsi_14 = if prices.len() >= 14 {
+            let price_values: Vec<f64> = prices.iter().map(|p| p.price).collect();
+            self.calculate_rsi_14(&price_values)
+        } else {
+            None
+        };
+        
+        // Calculate SMA20 and SMA50 (already calculated by strategy)
+        let sma_20 = strategy_indicators.sma_short;
+        let sma_50 = strategy_indicators.sma_long;
+        
+        // Calculate SMA200 (dashboard expects this)
+        let sma_200 = if prices.len() >= 200 {
+            let price_values: Vec<f64> = prices.iter().map(|p| p.price).collect();
+            self.calculate_sma_200(&price_values)
+        } else {
+            None
+        };
+        
+        // Calculate 24h price change (dashboard expects this)
+        let (price_change_24h, price_change_percent_24h) = if prices.len() >= 24 * 60 { // 24 hours of minute data
+            let current = prices[prices.len() - 1].price;
+            let past_24h = prices[prices.len() - 24 * 60].price;
+            let change = current - past_24h;
+            let change_percent = (change / past_24h) * 100.0;
+            (Some(change), Some(change_percent))
+        } else {
+            (None, None)
+        };
+        
+        // Calculate 24h volatility (dashboard expects this)
+        let volatility_24h = if prices.len() >= 24 * 60 {
+            let price_values: Vec<f64> = prices.iter().map(|p| p.price).collect();
+            self.calculate_volatility_24h(&price_values)
+        } else {
+            None
+        };
+        
+        crate::models::TechnicalIndicators {
+            pair: self.config.trading_pair.clone(),
+            timestamp: now,
+            sma_20,
+            sma_50,
+            sma_200,
+            rsi_14,
+            price_change_24h,
+            price_change_percent_24h,
+            volatility_24h,
+            current_price,
+        }
+    }
+
+    fn calculate_rsi_14(&self, prices: &[f64]) -> Option<f64> {
+        if prices.len() < 14 {
+            return None;
+        }
+        
+        let mut gains = 0.0;
+        let mut losses = 0.0;
+        
+        // Calculate initial average gain and loss
+        for i in 1..15 {
+            let change = prices[i] - prices[i - 1];
+            if change > 0.0 {
+                gains += change;
+            } else {
+                losses += change.abs();
+            }
+        }
+        
+        let avg_gain = gains / 14.0;
+        let avg_loss = losses / 14.0;
+        
+        if avg_loss == 0.0 {
+            return Some(100.0);
+        }
+        
+        let rs = avg_gain / avg_loss;
+        let rsi = 100.0 - (100.0 / (1.0 + rs));
+        
+        Some(rsi)
+    }
+    
+    fn calculate_sma_200(&self, prices: &[f64]) -> Option<f64> {
+        if prices.len() < 200 {
+            return None;
+        }
+        
+        let sum: f64 = prices[prices.len() - 200..].iter().sum();
+        Some(sum / 200.0)
+    }
+    
+    fn calculate_volatility_24h(&self, prices: &[f64]) -> Option<f64> {
+        if prices.len() < 24 * 60 { // Need 24 hours of minute data
+            return None;
+        }
+        
+        let recent_prices = &prices[prices.len() - 24 * 60..];
+        let returns: Vec<f64> = recent_prices.windows(2)
+            .map(|window| (window[1] - window[0]) / window[0])
+            .collect();
+        
+        let mean_return = returns.iter().sum::<f64>() / returns.len() as f64;
+        let variance = returns.iter()
+            .map(|r| (r - mean_return).powi(2))
+            .sum::<f64>() / returns.len() as f64;
+        
+        Some(variance.sqrt())
+    }
+
     // Database API methods for posting data
+    async fn post_consolidated_indicators(&self, indicators: &crate::models::TechnicalIndicators) -> Result<()> {
+        let url = format!("{}/indicators/{}/store", self.config.database_url, 
+                         urlencoding::encode(&self.config.trading_pair));
+        
+        // Convert to the format expected by the database service
+        let store_request = crate::models::StoreTechnicalIndicatorsRequest {
+            pair: self.config.trading_pair.clone(),
+            sma_20: indicators.sma_20,
+            sma_50: indicators.sma_50,
+            sma_200: indicators.sma_200,
+            rsi_14: indicators.rsi_14,
+            price_change_24h: indicators.price_change_24h,
+            price_change_percent_24h: indicators.price_change_percent_24h,
+            volatility_24h: indicators.volatility_24h,
+            current_price: indicators.current_price,
+        };
+        
+        let response = self.client.post(&url)
+            .json(&store_request)
+            .send()
+            .await?;
+            
+        if !response.status().is_success() {
+            warn!("Failed to post consolidated technical indicators: {}", response.status());
+        } else {
+            debug!("Posted consolidated technical indicators: RSI14={:?}, SMA20={:?}, SMA50={:?}, Volatility24h={:?}", 
+                   indicators.rsi_14, indicators.sma_20, indicators.sma_50, indicators.volatility_24h);
+        }
+        
+        Ok(())
+    }
+
     async fn post_technical_indicator(&self, indicator: &TechnicalIndicator) -> Result<()> {
         let url = format!("{}/indicators/{}/store", self.config.database_url, 
                          urlencoding::encode(&indicator.pair));

@@ -124,7 +124,7 @@ impl TradingStrategy {
         }
     }
 
-    fn calculate_custom_indicators(&self, prices: &[PriceFeed]) -> TradingIndicators {
+    pub fn calculate_custom_indicators(&self, prices: &[PriceFeed]) -> TradingIndicators {
         // Check if we have enough data for the longest indicator (SMA50 = 50 points)
         if prices.len() < self.config.sma_long_period {
             return TradingIndicators {
