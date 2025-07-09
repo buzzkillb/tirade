@@ -150,7 +150,7 @@ struct AppState {
 
 async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> {
     // Check cache first
-    const CACHE_TTL_SECONDS: i64 = 10; // Cache for 10 seconds
+    const CACHE_TTL_SECONDS: i64 = 2; // Cache for 2 seconds for more real-time updates
     let cache_key = "dashboard_data";
     
     {
@@ -176,6 +176,19 @@ async fn get_dashboard_data(state: web::Data<AppState>) -> Result<HttpResponse> 
     }
 
     Ok(HttpResponse::Ok().json(dashboard_data))
+}
+
+// Real-time trading signals endpoint (no cache)
+async fn get_realtime_signals(state: web::Data<AppState>) -> Result<HttpResponse> {
+    let signals = fetch_signals(&state.client, &state.database_url).await;
+    
+    match signals {
+        Ok(signals) => Ok(HttpResponse::Ok().json(signals)),
+        Err(e) => {
+            eprintln!("Error fetching real-time signals: {}", e);
+            Ok(HttpResponse::InternalServerError().json(vec![] as Vec<TradingSignal>))
+        }
+    }
 }
 
 async fn fetch_fresh_dashboard_data(state: &web::Data<AppState>) -> DashboardData {
@@ -786,6 +799,26 @@ async fn index() -> Result<HttpResponse> {
             50% {
                 background-position: 100% 50%;
                 filter: brightness(1.2);
+            }
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.7;
             }
         }
 
@@ -1579,6 +1612,9 @@ async fn index() -> Result<HttpResponse> {
                     <div class="legend-item">
                         <span style="font-size: 0.8rem; color: #666;">💡 Larger dots = Higher confidence signals</span>
                     </div>
+                    <div class="legend-item">
+                        <span style="font-size: 0.8rem; color: #666;">📈 Hover over dots for signal analysis</span>
+                    </div>
                 </div>
                 <canvas id="priceChart"></canvas>
             </div>
@@ -2143,7 +2179,7 @@ async fn index() -> Result<HttpResponse> {
         }
 
         function updatePriceChart(priceHistory, signals = [], activePositions = []) {
-            console.log('updatePriceChart called with', priceHistory.length, 'price points');
+            console.log('updatePriceChart called with', priceHistory.length, 'price points and', signals.length, 'signals');
             if (!priceHistory || priceHistory.length === 0) {
                 console.error('No price history data provided');
                 return;
@@ -2154,45 +2190,53 @@ async fn index() -> Result<HttpResponse> {
                 return;
             }
             const ctx = canvas.getContext('2d');
-            // Determine bot state
-            const inPosition = activePositions && activePositions.length > 0;
-            // Filter signals by confidence and type
-            const filteredSignals = signals.filter(signal => {
-                if (signal.confidence <= 0.3) return false;
-                if (inPosition) {
-                    // Only show sell dots
-                    return signal.signal_type.toLowerCase() === 'sell';
-                } else {
-                    // Only show buy dots
-                    return signal.signal_type.toLowerCase() === 'buy';
-                }
-            });
-            // Prepare chart data
+            
+            // Sort signals by timestamp (newest first)
+            const sortedSignals = signals.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+            
+            // Filter signals by confidence (show all signals with confidence > 0.2)
+            const filteredSignals = sortedSignals.filter(signal => signal.confidence > 0.2);
+            
+            // Prepare chart data - use price history for the line, signals for dots
             const labels = priceHistory.map(p => new Date(p.timestamp));
             const prices = priceHistory.map(p => p.price);
             const pointColors = [];
             const pointSizes = [];
-            priceHistory.forEach(pricePoint => {
+            
+            // Initialize all points as transparent (no signal)
+            priceHistory.forEach(() => {
+                pointColors.push('transparent');
+                pointSizes.push(0);
+            });
+            
+            // Overlay signals on price points
+            priceHistory.forEach((pricePoint, index) => {
                 const priceTime = new Date(pricePoint.timestamp);
-                // Find the closest filtered signal to this price point (within 5 minutes)
-                const closestSignal = filteredSignals.find(signal => {
+                
+                // Find signals within 5 minutes of this price point
+                const nearbySignals = filteredSignals.filter(signal => {
                     const signalTime = new Date(signal.timestamp);
                     const timeDiff = Math.abs(priceTime - signalTime);
-                    return timeDiff <= 5 * 60 * 1000;
+                    return timeDiff <= 5 * 60 * 1000; // 5 minutes
                 });
-                if (closestSignal) {
+                
+                if (nearbySignals.length > 0) {
+                    // Use the highest confidence signal
+                    const bestSignal = nearbySignals.reduce((best, current) => 
+                        current.confidence > best.confidence ? current : best
+                    );
+                    
                     let color;
-                    switch (closestSignal.signal_type.toLowerCase()) {
+                    switch (bestSignal.signal_type.toLowerCase()) {
                         case 'buy': color = '#14f195'; break;
                         case 'sell': color = '#ff6b6b'; break;
+                        case 'hold': color = '#f7931a'; break;
                         default: color = '#9945ff';
                     }
-                    pointColors.push(color);
-                    const size = Math.max(4, Math.min(16, 4 + (closestSignal.confidence * 12)));
-                    pointSizes.push(size);
-                } else {
-                    pointColors.push('#9945ff');
-                    pointSizes.push(2);
+                    
+                    pointColors[index] = color;
+                    // Size based on confidence (6-20px)
+                    pointSizes[index] = Math.max(6, Math.min(20, 6 + (bestSignal.confidence * 14)));
                 }
             });
             // If chart exists, update in place
@@ -2224,7 +2268,7 @@ async fn index() -> Result<HttpResponse> {
                 data: {
                     labels: labels,
                     datasets: [{
-                        label: 'SOL/USDC Price',
+                        label: 'SOL/USDC Price with Trading Signals',
                         data: prices,
                         borderColor: '#9945ff',
                         backgroundColor: gradient,
@@ -2255,23 +2299,43 @@ async fn index() -> Result<HttpResponse> {
                                 afterBody: function(context) {
                                     const dataIndex = context[0].dataIndex;
                                     const priceTime = new Date(priceHistory[dataIndex].timestamp);
-                                    const signal = filteredSignals.find(s => {
+                                    const pricePoint = priceHistory[dataIndex];
+                                    
+                                    // Find signals within 5 minutes of this price point
+                                    const nearbySignals = filteredSignals.filter(s => {
                                         const signalTime = new Date(s.timestamp);
                                         const timeDiff = Math.abs(priceTime - signalTime);
                                         return timeDiff <= 5 * 60 * 1000;
                                     });
-                                    if (signal) {
+                                    
+                                    if (nearbySignals.length > 0) {
+                                        // Use the highest confidence signal
+                                        const signal = nearbySignals.reduce((best, current) => 
+                                            current.confidence > best.confidence ? current : best
+                                        );
+                                        
                                         const confidencePercent = (signal.confidence * 100).toFixed(1);
                                         const confidenceEmoji = signal.confidence >= 0.7 ? '🔥' : 
                                                                signal.confidence >= 0.5 ? '⚡' : 
                                                                signal.confidence >= 0.3 ? '💡' : '💭';
+                                        
+                                        const signalColor = signal.signal_type.toLowerCase() === 'buy' ? '#14f195' : 
+                                                           signal.signal_type.toLowerCase() === 'sell' ? '#ff6b6b' : '#f7931a';
+                                        
                                         return [
+                                            `💰 Price: $${pricePoint.price.toFixed(4)}`,
                                             `${confidenceEmoji} Signal: ${signal.signal_type.toUpperCase()}`,
                                             `🎯 Confidence: ${confidencePercent}%`,
-                                            `💭 Reason: ${signal.reasoning}`
+                                            `💭 Analysis: ${signal.reasoning}`,
+                                            `⏰ Time: ${new Date(signal.timestamp).toLocaleString()}`
                                         ];
                                     }
-                                    return '';
+                                    
+                                    // If no signal, just show price info
+                                    return [
+                                        `💰 Price: $${pricePoint.price.toFixed(4)}`,
+                                        `⏰ Time: ${new Date(pricePoint.timestamp).toLocaleString()}`
+                                    ];
                                 }
                             }
                         }
@@ -2345,7 +2409,7 @@ async fn index() -> Result<HttpResponse> {
             // Fallback to polling if SSE fails
             setTimeout(() => {
                 console.log('Falling back to polling...');
-                setInterval(loadDashboard, 30000);
+                setInterval(loadDashboard, 5000); // Refresh every 5 seconds instead of 30
             }, 5000);
         };
         
@@ -2395,6 +2459,78 @@ async fn index() -> Result<HttpResponse> {
                 
             } catch (error) {
                 console.error('Error updating prices:', error);
+            }
+        }
+
+        // Track last signal timestamp for new signal detection
+        let lastSignalTimestamp = null;
+        
+        // Function to update trading signals in real-time
+        async function updateSignals() {
+            try {
+                const response = await fetch('/api/signals/realtime');
+                const signals = await response.json();
+                
+                const signalsContainer = document.getElementById('signals-container');
+                if (signalsContainer) {
+                    if (signals.length === 0) {
+                        signalsContainer.innerHTML = '<p>No signals generated yet</p>';
+                    } else {
+                        // Check for new signals
+                        const latestSignal = signals[0];
+                        const isNewSignal = lastSignalTimestamp === null || 
+                                          new Date(latestSignal.timestamp) > new Date(lastSignalTimestamp);
+                        
+                        if (isNewSignal && lastSignalTimestamp !== null) {
+                            // Flash notification for new signal
+                            const notification = document.createElement('div');
+                            notification.style.cssText = `
+                                position: fixed; top: 20px; right: 20px; 
+                                background: linear-gradient(145deg, #0a0a0a, #1a1a1a); 
+                                border: 2px solid #14f195; border-radius: 10px; 
+                                padding: 15px; z-index: 1000; color: #14f195;
+                                font-weight: bold; animation: slideIn 0.5s ease-out;
+                            `;
+                            notification.textContent = `🆕 New ${latestSignal.signal_type.toUpperCase()} signal detected!`;
+                            document.body.appendChild(notification);
+                            
+                            // Remove notification after 3 seconds
+                            setTimeout(() => {
+                                notification.remove();
+                            }, 3000);
+                        }
+                        
+                        // Update last signal timestamp
+                        if (signals.length > 0) {
+                            lastSignalTimestamp = signals[0].timestamp;
+                        }
+                        
+                        signalsContainer.innerHTML = signals.slice(0, 5).map((signal, index) => {
+                            const signalType = signal.signal_type.toLowerCase();
+                            const signalIcon = signalType === 'buy' ? '🟢' : signalType === 'sell' ? '🔴' : '🟡';
+                            const signalColor = signalType === 'buy' ? '#14f195' : signalType === 'sell' ? '#ff6b6b' : '#f7931a';
+                            const confidencePercent = (signal.confidence * 100).toFixed(1);
+                            
+                            // Highlight newest signal
+                            const isNewest = index === 0 && isNewSignal;
+                            const highlightStyle = isNewest ? 'box-shadow: 0 0 20px rgba(20, 241, 149, 0.5); animation: pulse 2s ease-in-out;' : '';
+                            
+                            return `
+                                <div style="background: linear-gradient(145deg, #0a0a0a, #1a1a1a); border: 1px solid ${signalColor}; border-radius: 10px; padding: 15px; margin-bottom: 10px; ${highlightStyle}">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                        <span style="font-size: 1.2rem;">${signalIcon} ${signal.signal_type.toUpperCase()}</span>
+                                        <span style="color: ${signalColor}; font-weight: bold;">${confidencePercent}%</span>
+                                    </div>
+                                    <div style="color: #14f195; font-size: 1.1rem; font-weight: bold; margin-bottom: 5px;">$${signal.price.toFixed(4)}</div>
+                                    <div style="color: #888; font-size: 0.9rem; margin-bottom: 8px;">${signal.reasoning}</div>
+                                    <div style="color: #666; font-size: 0.8rem;">${new Date(signal.timestamp).toLocaleString()}</div>
+                                </div>
+                            `;
+                        }).join('');
+                    }
+                }
+            } catch (error) {
+                console.error('Error updating signals:', error);
             }
         }
         
@@ -2549,8 +2685,12 @@ async fn index() -> Result<HttpResponse> {
         // Update exchange prices every 1 second
         setInterval(updateExchangePrices, 1000);
         
+        // Update signals every 3 seconds for real-time updates
+        setInterval(updateSignals, 3000);
+        
         // Initial fetch
         updateExchangePrices();
+        updateSignals();
         
         // Initial load
         loadDashboard();
@@ -2589,6 +2729,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(app_state.clone())
             .route("/", web::get().to(index))
             .route("/api/dashboard", web::get().to(get_dashboard_data))
+            .route("/api/signals/realtime", web::get().to(get_realtime_signals))
             .route("/api/dashboard/stream", web::get().to(dashboard_stream))
             .route("/api/price/stream", web::get().to(price_stream))
             .service(Files::new("/static", "./static").show_files_listing())
