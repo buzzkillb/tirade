@@ -2196,20 +2196,30 @@ async fn index() -> Result<HttpResponse> {
                 }
             });
             // If chart exists, update in place
-            if (window.priceChart) {
-                window.priceChart.data.labels = labels;
-                window.priceChart.data.datasets[0].data = prices;
-                window.priceChart.data.datasets[0].pointBackgroundColor = pointColors;
-                window.priceChart.data.datasets[0].pointRadius = pointSizes;
-                window.priceChart.update('none'); // No animation
-                return;
+            if (window.priceChart && window.priceChart.data && window.priceChart.data.datasets && window.priceChart.data.datasets[0]) {
+                try {
+                    window.priceChart.data.labels = labels;
+                    window.priceChart.data.datasets[0].data = prices;
+                    window.priceChart.data.datasets[0].pointBackgroundColor = pointColors;
+                    window.priceChart.data.datasets[0].pointRadius = pointSizes;
+                    window.priceChart.update('none'); // No animation
+                    return;
+                } catch (error) {
+                    console.error('Error updating existing chart:', error);
+                    // If update fails, destroy and recreate
+                    if (window.priceChart) {
+                        window.priceChart.destroy();
+                        window.priceChart = null;
+                    }
+                }
             }
             // Otherwise, create chart
-            const gradient = ctx.createLinearGradient(0, 0, 0, 400);
-            gradient.addColorStop(0, 'rgba(153, 69, 255, 0.3)');
-            gradient.addColorStop(0.5, 'rgba(20, 241, 149, 0.1)');
-            gradient.addColorStop(1, 'rgba(0, 0, 0, 0.05)');
-            window.priceChart = new Chart(ctx, {
+            try {
+                const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+                gradient.addColorStop(0, 'rgba(153, 69, 255, 0.3)');
+                gradient.addColorStop(0.5, 'rgba(20, 241, 149, 0.1)');
+                gradient.addColorStop(1, 'rgba(0, 0, 0, 0.05)');
+                window.priceChart = new Chart(ctx, {
                 type: 'line',
                 data: {
                     labels: labels,
@@ -2281,6 +2291,10 @@ async fn index() -> Result<HttpResponse> {
                     }
                 }
             });
+            } catch (error) {
+                console.error('Error creating chart:', error);
+                window.priceChart = null;
+            }
         }
 
         // Real-time updates using Server-Sent Events
