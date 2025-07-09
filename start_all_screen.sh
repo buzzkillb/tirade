@@ -204,7 +204,7 @@ start_service_in_screen "Price Feed" "tirade-price" "price-feed" \
 # Start trading logic
 print_status "Starting trading logic..."
 start_service_in_screen "Trading Logic" "tirade-trading" "trading-logic" \
-    "cargo run" "N/A"
+    "TRANSACTION_BINARY_PATH=\"../solana-trading-bot/target/debug/transaction\" cargo run" "N/A"
 
 # Start dashboard
 print_status "Starting dashboard..."

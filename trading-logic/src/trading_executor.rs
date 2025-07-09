@@ -88,23 +88,29 @@ impl TradingExecutor {
             solana_private_key
         };
 
-        // Determine transaction binary path - try different locations
-        let possible_paths = vec![
-            "../target/debug/transaction",
-            "./target/debug/transaction", 
-            "target/debug/transaction",
-            "solana-trading-bot/target/debug/transaction",
-        ];
-        
-        let transaction_binary_path = possible_paths
-            .iter()
-            .find(|path| Path::new(path).exists())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "../target/debug/transaction".to_string());
+        // Determine transaction binary path - try environment variable first, then different locations
+        let transaction_binary_path = if let Ok(env_path) = env::var("TRANSACTION_BINARY_PATH") {
+            env_path
+        } else {
+            let possible_paths = vec![
+                "../target/debug/transaction",
+                "./target/debug/transaction", 
+                "target/debug/transaction",
+                "solana-trading-bot/target/debug/transaction",
+            ];
+            
+            possible_paths
+                .iter()
+                .find(|path| Path::new(path).exists())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "../target/debug/transaction".to_string())
+        };
 
         if !Path::new(&transaction_binary_path).exists() {
             warn!("⚠️  Transaction binary not found at expected paths. Trading execution may fail.");
-            warn!("   Expected locations: {:?}", possible_paths);
+            warn!("   Current path: {}", transaction_binary_path);
+            warn!("   Set TRANSACTION_BINARY_PATH environment variable to specify correct path");
+            warn!("   Expected locations: ../target/debug/transaction, ./target/debug/transaction, etc.");
         } else {
             info!("✅ Found transaction binary at: {}", transaction_binary_path);
         }
