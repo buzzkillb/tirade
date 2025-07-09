@@ -640,27 +640,34 @@ impl TradingEngine {
     }
 
     async fn post_trading_config(&self) -> Result<()> {
-        let config_db = TradingConfigDb {
-            pair: self.config.trading_pair.clone(),
-            strategy_name: "RSI_Trend_Strategy".to_string(),
-            rsi_oversold: 30.0,
-            rsi_overbought: 70.0,
-            take_profit_threshold: self.config.take_profit_threshold,
-            stop_loss_threshold: self.config.stop_loss_threshold,
-            min_confidence: 0.4,
-            is_active: true,
-            created_at: Utc::now(),
-        };
+        // Create the correct request structure that the database service expects
+        let timestamp = Utc::now().format("%Y%m%d_%H%M%S").to_string();
+        let config_name = format!("RSI_Trend_Strategy_{}", timestamp);
+        
+        let create_config_request = serde_json::json!({
+            "name": config_name,
+            "pair": self.config.trading_pair,
+            "min_data_points": self.config.min_data_points as i32,
+            "check_interval_secs": self.config.check_interval_secs as i32,
+            "take_profit_percent": self.config.take_profit_threshold * 100.0,
+            "stop_loss_percent": self.config.stop_loss_threshold * 100.0,
+            "max_position_size": 100.0,
+        });
 
         let url = format!("{}/configs", self.config.database_url);
         
+        // Log the request for debugging
+        debug!("Sending trading config request: {}", serde_json::to_string_pretty(&create_config_request)?);
+        
         let response = self.client.post(&url)
-            .json(&config_db)
+            .json(&create_config_request)
             .send()
             .await?;
             
         if !response.status().is_success() {
-            warn!("Failed to post trading config: {}", response.status());
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            warn!("Failed to post trading config: {} - {}", status, error_text);
         } else {
             debug!("Posted trading config for {}", self.config.trading_pair);
         }
