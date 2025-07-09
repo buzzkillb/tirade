@@ -1,391 +1,520 @@
-# Tirade: Advanced Solana Quant Trading Bot Suite
+# 🚀 TiRADE - Advanced Trading Bot Suite
 
-## 🚀 Overview
-Tirade is a sophisticated, production-ready Rust-based trading bot system for Solana, featuring advanced multi-timeframe analysis, enhanced trading strategies, and real-time execution capabilities. Built with modern Rust async patterns and comprehensive error handling.
+A sophisticated, real-time cryptocurrency trading bot built in Rust with multi-timeframe analysis, technical indicators, and automated execution on the Solana blockchain.
 
-## 🎯 Key Features
+![TiRADE Dashboard](https://img.shields.io/badge/Status-Active-brightgreen)
+![Rust](https://img.shields.io/badge/Rust-1.70+-orange)
+![License](https://img.shields.io/badge/License-MIT-blue)
 
-### 🔥 **Enhanced Trading Logic**
-- **Multi-timeframe Analysis**: Short-term, medium-term, and long-term strategy evaluation
-- **7 Advanced Trading Strategies**:
-  - RSI Divergence Detection
-  - Moving Average Crossover
-  - Volatility Breakout
-  - Mean Reversion
-  - RSI Threshold Analysis
-  - Momentum Confirmation
-  - Enhanced Trend Following
-- **Dynamic Threshold Calculation**: Adaptive RSI and volatility thresholds based on market regime
-- **Sophisticated Confidence Scoring**: Multi-strategy validation with 70%+ threshold for execution
-- **Risk Management**: Dynamic take profit and stop loss calculations
+## 📋 Table of Contents
 
-### 📊 **Real-time Data & Analysis**
-- **24-hour Historical Data**: Comprehensive price analysis with 5,000+ data points
-- **Technical Indicators**: RSI (14), SMA (20), volatility analysis, trend strength
-- **Market Sentiment Analysis**: Bullish/bearish signal counting and regime detection
-- **High-frequency Price Feeds**: Real-time data from Pyth and Jupiter APIs
+- [Overview](#-overview)
+- [Architecture](#-architecture)
+- [Trading Engine Logic](#-trading-engine-logic)
+- [Quick Start](#-quick-start)
+- [Installation](#-installation)
+- [Configuration](#-configuration)
+- [Usage](#-usage)
+- [Dashboard](#-dashboard)
+- [Troubleshooting](#-troubleshooting)
+- [Contributing](#-contributing)
+- [License](#-license)
 
-### 🖥️ **Enhanced Dashboard**
-- **Real-time Signal Display**: Live trading signals with confidence levels
-- **Strategy Trigger Visualization**: Checkboxes showing active trading strategies
-- **Detailed Analysis**: Comprehensive reasoning and signal details
-- **Risk Management Display**: Take profit and stop loss levels for each signal
-- **Multi-timeframe Charts**: Visual representation of short/medium/long-term analysis
+## 🎯 Overview
 
-### 🏗️ **System Architecture**
-- **Modular Design**: 5 independent services with clear separation of concerns
-- **Database Service**: REST API with SQLite backend for data persistence
-- **Price Feed**: Real-time market data ingestion
-- **Trading Logic**: Advanced strategy execution and signal generation
-- **Dashboard**: Real-time web interface for monitoring
-- **Trading Bot**: Solana blockchain integration via Jupiter
+TiRADE is a comprehensive trading bot suite that combines real-time market analysis, technical indicators, and automated execution. Built with Rust for performance and reliability, it features:
 
-## 🛠️ Installation & Setup
+- **Real-time Price Feeds**: Multiple sources (Pyth, Jupiter, Coinbase)
+- **Advanced Technical Analysis**: RSI, SMA, volatility calculations
+- **Multi-timeframe Strategy**: Short, medium, and long-term analysis
+- **Automated Execution**: Direct Solana blockchain integration
+- **Live Dashboard**: Real-time monitoring and control
+- **Risk Management**: Dynamic stop-loss and take-profit
 
-### Prerequisites
-- **Rust** (latest stable) - [Install Rust](https://rustup.rs/)
-- **SQLite3** (for database inspection)
-- **Internet access** (for price feeds and Solana RPC)
-- **Solana wallet** with USDC and SOL for trading
+## 🏗️ Architecture
 
-### Quick Start
-
-#### 1. Clone Repository
-```bash
-git clone https://github.com/yourusername/tirade.git
-cd tirade
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Price Feed    │    │  Trading Logic  │    │   Dashboard     │
+│                 │    │                 │    │                 │
+│ • Pyth Network  │───▶│ • RSI Analysis  │───▶│ • Live Charts   │
+│ • Jupiter API   │    │ • SMA Crossover │    │ • Signal Display│
+│ • Coinbase API  │    │ • Volatility    │    │ • Position Mgmt │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+         ▼                       ▼                       ▼
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│  Database       │    │  Transaction    │    │  System Status  │
+│  Service        │    │  Executor       │    │  Monitoring     │
+│                 │    │                 │    │                 │
+│ • SQLite Store  │    │ • Solana Wallet│    │ • Service Health│
+│ • API Endpoints │    │ • Jupiter Swap  │    │ • Performance   │
+│ • Position Mgmt │    │ • Transaction   │    │ • Logs          │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
-#### 2. Configure Environment
-```bash
-# Copy your .env file to project root
-cp /path/to/your/.env ./
+## 🧠 Trading Engine Logic
 
-# Or create new .env file
+### Core Strategy Components
+
+#### 1. **Multi-timeframe Analysis**
+```rust
+// Timeframe Configuration
+short_timeframe: 30 minutes    // Recent momentum
+medium_timeframe: 2 hours      // Intermediate trends  
+long_timeframe: 6 hours        // Overall direction
+```
+
+#### 2. **Technical Indicators**
+
+**RSI (Relative Strength Index)**
+- **Fast RSI (7 periods)**: Short-term momentum
+- **Slow RSI (21 periods)**: Long-term momentum
+- **Divergence Detection**: Momentum shifts between timeframes
+
+**Moving Averages**
+- **SMA20**: Short-term trend confirmation
+- **SMA50**: Medium-term trend direction
+- **Crossover Analysis**: Price vs SMA relationships
+
+**Volatility Analysis**
+- **20-period volatility**: Market regime detection
+- **Dynamic thresholds**: Adaptive to market conditions
+
+#### 3. **Signal Generation Logic**
+
+```rust
+// Confidence Calculation
+confidence = (
+    rsi_divergence_score * 0.25 +
+    ma_crossover_score * 0.25 +
+    volatility_score * 0.20 +
+    momentum_score * 0.20 +
+    trend_confirmation * 0.10
+);
+
+// Signal Types
+if confidence > 0.45 && no_current_position {
+    SignalType::Buy
+} else if current_position_exists && exit_conditions_met {
+    SignalType::Sell
+} else {
+    SignalType::Hold
+}
+```
+
+#### 4. **Risk Management**
+
+**Dynamic Position Sizing**
+```rust
+position_size = wallet_balance * position_size_percentage
+max_position = min(position_size, max_position_size)
+```
+
+**Stop Loss & Take Profit**
+```rust
+// Dynamic based on volatility
+stop_loss = entry_price * (1 - volatility_multiplier)
+take_profit = entry_price * (1 + volatility_multiplier * 1.67)
+```
+
+#### 5. **Position Management**
+
+**Single Position Strategy**
+- Only one position at a time
+- Strict position enforcement
+- 5-minute signal cooldown between trades
+- Automatic position recovery on restart
+
+**Position Lifecycle**
+```
+1. Signal Generation → 2. Position Creation → 3. Monitoring → 4. Exit
+```
+
+### Strategy Triggers
+
+#### **Buy Signal Conditions**
+1. **RSI Divergence**: Fast RSI > Slow RSI with momentum
+2. **MA Crossover**: Price above SMA20 and SMA50
+3. **Volatility Breakout**: Significant price movement
+4. **Momentum Confirmation**: Trend strength validation
+5. **No Current Position**: Single position enforcement
+
+#### **Sell Signal Conditions**
+1. **Take Profit Hit**: Dynamic profit target reached
+2. **Stop Loss Hit**: Dynamic loss limit reached
+3. **Trend Reversal**: Technical indicators show reversal
+4. **Time-based Exit**: Maximum position duration
+
+## 🚀 Quick Start
+
+### Prerequisites
+- **Rust 1.70+**: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- **Solana CLI**: `sh -c "$(curl -sSfL https://release.solana.com/v1.17.0/install)"`
+- **Git**: `sudo apt install git`
+
+### Installation
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/buzzkillb/tirade.git
+cd tirade
+
+# 2. Initialize the database
+./init-database.sh
+
+# 3. Configure environment
+cp env.example .env
+# Edit .env with your Solana wallet and API keys
+
+# 4. Start all services
+./start_all_screen.sh
+```
+
+### Access Dashboard
+- **Local**: http://localhost:3000
+- **Remote**: SSH tunnel: `ssh -L 3000:127.0.0.1:3000 user@your-vps`
+
+## ⚙️ Installation
+
+### Step 1: System Requirements
+
+```bash
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install dependencies
+sudo apt install -y build-essential pkg-config libssl-dev curl git screen
+
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# Install Solana CLI
+sh -c "$(curl -sSfL https://release.solana.com/v1.17.0/install)"
+export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+```
+
+### Step 2: Clone and Setup
+
+```bash
+# Clone repository
+git clone https://github.com/buzzkillb/tirade.git
+cd tirade
+
+# Initialize database
+./init-database.sh
+
+# Build all components
+cargo build --release
+```
+
+### Step 3: Configuration
+
+```bash
+# Copy environment template
+cp env.example .env
+
+# Edit configuration
 nano .env
 ```
 
-**⚠️ CRITICAL: .env file must be in project root directory:**
-```
-/home/user/tirade/.env  ✅
-/home/user/tirade/trading-logic/.env  ❌
-```
-
-**Essential Configuration:**
+**Required Environment Variables:**
 ```bash
 # Solana Configuration
-SOLANA_PRIVATE_KEY=[your_private_key_here]
-ENABLE_TRADING_EXECUTION=false  # Set to true for real trading
+SOLANA_PRIVATE_KEY="your_base58_private_key"
+SOLANA_RPC_URL="https://api.mainnet-beta.solana.com"
+
+# Trading Configuration
+TRADING_PAIR="SOL/USDC"
+POSITION_SIZE_PERCENTAGE=0.5
+MIN_CONFIDENCE_THRESHOLD=0.45
+SIGNAL_COOLDOWN_SECONDS=300
 
 # Database Configuration
-DATABASE_URL=sqlite:../data/trading_bot.db
-PRICE_FEED_DATABASE_URL=http://localhost:8080
+DATABASE_URL="sqlite:data/trading_bot.db"
 
-# Trading Parameters
-MIN_CONFIDENCE_THRESHOLD=0.7
-POSITION_SIZE_PERCENTAGE=0.5
-SLIPPAGE_TOLERANCE=0.005
+# API Keys (Optional)
+COINBASE_API_KEY="your_coinbase_key"
 ```
 
-#### 3. Automated Startup (Recommended)
-```bash
-# Make scripts executable
-chmod +x start-tirade.sh init-database.sh
+## 🎮 Usage
 
-# Start all services with one command
-./start-tirade.sh
+### Starting the Bot
+
+```bash
+# Start all services in screen sessions
+./start_all_screen.sh
+
+# Or start individually:
+screen -S database -d -m bash -c "cd database-service && cargo run"
+screen -S price-feed -d -m bash -c "cd price-feed && cargo run"
+screen -S trading-logic -d -m bash -c "cd trading-logic && cargo run"
+screen -S dashboard -d -m bash -c "cd dashboard && cargo run"
 ```
 
-**The startup script will:**
-- ✅ Check environment and .env file
-- 🗄️ Initialize database automatically
-- 📊 Start Database Service (Port 8080)
-- 📈 Start Price Feed (Port 8081)
-- 🧠 Start Trading Logic
-- 🌐 Start Dashboard (localhost:3000)
-
-#### 4. Manual Startup (Alternative)
-
-##### Option A: Multiple Terminals
-```bash
-# Terminal 1: Database Service
-DATABASE_URL="sqlite:data/trading_bot.db" cargo run --bin database-service
-
-# Terminal 2: Price Feed
-DATABASE_URL="http://localhost:8080" cargo run --bin price-feed
-
-# Terminal 3: Trading Logic
-DATABASE_URL="http://localhost:8080" cargo run --bin trading-logic
-
-# Terminal 4: Dashboard
-DATABASE_URL="http://localhost:8080" cargo run --bin dashboard
-```
-
-##### Option B: Screen Sessions (Recommended for VPS)
-Use `screen` to run services in background sessions that persist after SSH disconnection:
+### Screen Management
 
 ```bash
-# 1. Start Database Service (First - Required by all others)
-screen -S database
-DATABASE_URL="sqlite:data/trading_bot.db" cargo run --bin database-service
-# Press Ctrl+A, D to detach from screen
-
-# 2. Start Price Feed (Second - Provides data)
-screen -S price-feed
-DATABASE_URL="http://localhost:8080" cargo run --bin price-feed
-# Press Ctrl+A, D to detach from screen
-
-# 3. Start Trading Logic (Third - Analyzes data)
-screen -S trading-logic
-DATABASE_URL="http://localhost:8080" cargo run --bin trading-logic
-# Press Ctrl+A, D to detach from screen
-
-# 4. Start Dashboard (Fourth - Web interface)
-screen -S dashboard
-DATABASE_URL="http://localhost:8080" cargo run --bin dashboard
-# Press Ctrl+A, D to detach from screen
-```
-
-**Screen Management Commands:**
-```bash
-# List all screens
+# List all sessions
 screen -ls
 
-# Reattach to a screen
-screen -r database        # or price-feed, trading-logic, dashboard
+# Attach to specific session
+screen -r database
+screen -r trading-logic
+screen -r dashboard
 
-# Kill a specific screen
+# Detach from session
+# Press Ctrl+A, then D
+
+# Kill specific session
 screen -S database -X quit
 
-# Kill all screens
+# Kill all sessions
 pkill screen
-
-# View screen logs without attaching
-screen -S trading-logic -X hardcopy /tmp/trading-logic.log
-tail -f /tmp/trading-logic.log
 ```
 
-**Verification Steps:**
+### Monitoring
+
 ```bash
-# 1. Check Database Service
-curl http://localhost:8080/health
+# Check service status
+./check_trading_status.sh
 
-# 2. Check Price Feed (look for price updates in screen)
-screen -r price-feed
+# View trading logs
+tail -f logs/trading_logic.log
 
-# 3. Check Trading Logic (look for analysis logs in screen)
-screen -r trading-logic
+# Clear trading data
+./clear_trading_data.sh
 
-# 4. Check Dashboard (visit in browser)
-curl http://localhost:3000
+# Query positions
+./query_trades.sh
 ```
 
-**Important Notes:**
-- **Database service** needs SQLite file path (`sqlite:data/trading_bot.db`)
-- **All other services** need HTTP URL (`http://localhost:8080`)
-- Wait 10-15 seconds between starting services
-- Trading logic shows analysis reports every 30 seconds
-- Price feed continuously fetches SOL/USDC prices
+## 📊 Dashboard
 
-## 🌐 Dashboard Access
+### Features
 
-### Local Access
-- **URL**: http://localhost:3000
-- **Security**: Binds to localhost only (127.0.0.1)
+- **Real-time Price Charts**: Live SOL/USDC with technical indicators
+- **Trading Signals**: Live signals with confidence levels and reasoning
+- **Position Management**: Active positions with P&L tracking
+- **System Status**: Service health and performance metrics
+- **Technical Indicators**: RSI, SMA, volatility displays
+- **Performance Metrics**: Win rate, total P&L, Sharpe ratio
 
-### Remote Access (VPS Deployment)
-```bash
-# SSH Tunnel (Recommended)
-ssh -L 3000:127.0.0.1:3000 user@vps-ip
-# Then access http://localhost:3000 from your local machine
+### Dashboard Sections
 
-# Or modify startup script for external access:
-# Change --host 127.0.0.1 to --host 0.0.0.0 in start-tirade.sh
-```
+#### **System Status**
+- Database connectivity
+- Price feed status
+- Trading logic status
+- Active position (Yes/No)
+- Signal count today
 
-## 📊 Trading Strategy Details
+#### **Live Exchange Prices**
+- Pyth Network (🔮)
+- Jupiter (🪐)
+- Coinbase (🟢 LIVE)
 
-### Multi-timeframe Analysis
-- **Short-term**: Recent price movements and momentum
-- **Medium-term**: Intermediate trend analysis
-- **Long-term**: Overall market direction and structure
+#### **Trading Signals**
+- Signal type (Buy/Sell/Hold)
+- Confidence percentage
+- Technical reasoning
+- Strategy triggers
 
-### Strategy Components
-1. **RSI Divergence**: Detects momentum shifts between fast and slow RSI
-2. **Moving Average Crossover**: Price vs SMA analysis with trend confirmation
-3. **Volatility Breakout**: Identifies significant price movements
-4. **Mean Reversion**: Extreme RSI conditions (oversold/overbought)
-5. **RSI Threshold**: Dynamic oversold/overbought levels based on market regime
-6. **Momentum Confirmation**: Validates trend strength and direction
-7. **Enhanced Trend Following**: Multi-factor trend analysis with regime detection
+#### **Active Positions**
+- Entry price and time
+- Current P&L
+- Position duration
+- Exit conditions
 
-### Risk Management
-- **Dynamic Take Profit**: 1.60% based on volatility and market conditions
-- **Dynamic Stop Loss**: 0.96% to limit downside risk
-- **Position Sizing**: Configurable percentage of wallet balance
-- **Confidence Threshold**: 70% minimum for trade execution
-
-## 🚀 VPS Deployment
-
-### Option 1: Git Clone (Recommended)
-```bash
-# On VPS
-git clone https://github.com/yourusername/tirade.git
-cd tirade
-
-# Copy your .env file
-scp /path/to/your/.env user@vps-ip:/home/user/tirade/
-
-# Install dependencies
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-sudo apt update && sudo apt install -y build-essential pkg-config libssl-dev
-
-# Start everything
-./start-tirade.sh
-```
-
-### Option 2: Archive Transfer
-```bash
-# On your local machine
-tar -czf tirade-backup.tar.gz tirade/
-scp tirade-backup.tar.gz user@vps-ip:/home/user/
-
-# On VPS
-tar -xzf tirade-backup.tar.gz
-cd tirade
-./start-tirade.sh
-```
-
-### VPS Configuration
-```bash
-# Open required ports
-sudo ufw allow 3000  # Dashboard
-sudo ufw allow 8080  # Database API
-
-# For external dashboard access, modify start-tirade.sh:
-# Change --host 127.0.0.1 to --host 0.0.0.0
-```
-
-## 📈 System Monitoring
-
-### Dashboard Features
-- **📊 Live Price Charts**: Real-time SOL/USDC with technical indicators
-- **🎯 Trading Signals**: Live signals with confidence levels and strategy triggers
-- **📈 Position Management**: Active positions and P&L tracking
-- **🔧 System Status**: Service health indicators
-- **⚡ Trading Execution**: Real-time trading status
-- **📊 Signal Analysis**: Detailed reasoning and strategy breakdown
-
-### Log Monitoring
-```bash
-# View all service logs
-tail -f /var/log/syslog | grep -E '(trading|dashboard|price)'
-
-# Check specific service
-ps aux | grep cargo
-```
-
-### Health Checks
-```bash
-# Database service
-curl http://localhost:8080/health
-
-# Dashboard
-curl http://localhost:3000
-```
-
-## 🔧 Configuration & Tuning
+## 🔧 Configuration
 
 ### Trading Parameters
+
 ```bash
-# .env file adjustments
-MIN_CONFIDENCE_THRESHOLD=0.7    # Higher = fewer, more confident trades
+# Strategy Configuration
+MIN_DATA_POINTS=60              # Minimum data points before analysis
+CHECK_INTERVAL_SECS=30          # Analysis frequency
+CONFIDENCE_THRESHOLD=0.45       # Minimum confidence for trades
+SIGNAL_COOLDOWN_SECS=300        # Cooldown between signals
+
+# Risk Management
 POSITION_SIZE_PERCENTAGE=0.5    # % of wallet per trade
-SLIPPAGE_TOLERANCE=0.005        # Maximum acceptable slippage
+MAX_POSITION_SIZE=100.0         # Maximum position size
+TAKE_PROFIT_PERCENT=2.0         # Dynamic take profit
+STOP_LOSS_PERCENT=1.4           # Dynamic stop loss
 ```
 
-### Strategy Tuning
-The system automatically adjusts based on market conditions:
-- **Trending Markets**: Higher confidence thresholds, longer holding periods
-- **Consolidating Markets**: Lower thresholds, shorter holding periods
-- **High Volatility**: Wider stop losses, higher take profits
-- **Low Volatility**: Tighter stops, lower take profits
+### Technical Indicators
 
-## 🛡️ Security Features
+```bash
+# RSI Configuration
+RSI_FAST_PERIOD=7              # Fast RSI periods
+RSI_SLOW_PERIOD=21             # Slow RSI periods
+RSI_OVERSOLD=30                # Oversold threshold
+RSI_OVERBOUGHT=70              # Overbought threshold
 
-### Dashboard Security
-- **Localhost Binding**: Dashboard binds to 127.0.0.1 by default
-- **SSH Tunnel Access**: Secure remote access via SSH tunneling
-- **No External Exposure**: Prevents unauthorized access
+# Moving Averages
+SMA_SHORT_PERIOD=20            # Short-term SMA
+SMA_LONG_PERIOD=50             # Long-term SMA
 
-### Trading Security
-- **Paper Trading Mode**: Safe testing without real funds
-- **Confidence Thresholds**: Prevents low-quality trades
-- **Position Limits**: Configurable risk per trade
-- **Stop Loss Protection**: Automatic loss limiting
+# Volatility
+VOLATILITY_WINDOW=20           # Volatility calculation window
+```
 
-## 🚨 Troubleshooting
+## 🛠️ Troubleshooting
 
 ### Common Issues
+
+#### **Service Won't Start**
 ```bash
-# Port already in use
+# Check if ports are in use
 lsof -ti:8080 | xargs kill -9
 lsof -ti:3000 | xargs kill -9
 
-# Database not found
+# Check environment variables
+echo $SOLANA_PRIVATE_KEY
+echo $DATABASE_URL
+```
+
+#### **Database Errors**
+```bash
+# Reinitialize database
 ./init-database.sh
 
-# Environment variables not loaded
-# Ensure .env is in project root directory
+# Check database file
+ls -la data/trading_bot.db
+```
 
-# Services not starting
-# Check all services are running in correct order
+#### **Trading Logic Issues**
+```bash
+# Check logs
+tail -f logs/trading_logic.log
+
+# Verify wallet
+solana balance
+
+# Test transaction binary
+./solana-trading-bot/target/debug/transaction
+```
+
+#### **Dashboard Not Loading**
+```bash
+# Check dashboard service
+curl http://localhost:3000
+
+# Check database API
+curl http://localhost:8080/health
+
+# Restart dashboard
+screen -S dashboard -X quit
+cd dashboard && cargo run
 ```
 
 ### Error Messages
-- **"SOLANA_PRIVATE_KEY not found"**: Check .env file location
-- **"Address already in use"**: Kill existing processes
-- **"Database connection failed"**: Start database service first
-- **"Permission denied"**: Check file permissions
 
-## 📊 Performance Metrics
+| Error | Solution |
+|-------|----------|
+| `SOLANA_PRIVATE_KEY not found` | Check .env file location and format |
+| `Address already in use` | Kill existing processes on ports 8080/3000 |
+| `Database connection failed` | Start database service first |
+| `Permission denied` | Check file permissions and ownership |
+
+### Performance Optimization
+
+```bash
+# Increase system limits
+echo 'fs.file-max = 65536' | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
+# Optimize SQLite
+echo 'PRAGMA journal_mode=WAL;' | sqlite3 data/trading_bot.db
+```
+
+## 📈 Performance Metrics
 
 ### Expected Behavior
+
 - **Price Updates**: Every 1 second
 - **Trading Analysis**: Every 30 seconds
-- **Dashboard Refresh**: Every 30 seconds
-- **Data Points**: 5,000+ price records for analysis
+- **Dashboard Refresh**: Every 2 seconds
 - **Signal Generation**: Based on confidence thresholds
+- **Position Duration**: 5 minutes to several hours
 
 ### Success Indicators
+
 - ✅ All services show "Running" status
 - ✅ Dashboard displays real-time data
 - ✅ Trading signals appear with confidence levels
-- ✅ Database stores all historical data
+- ✅ Database stores historical data
 - ✅ No error messages in logs
 
-## 🎯 Next Steps
+## 🔒 Security
 
-1. **Monitor System**: Run for 24 hours to collect sufficient data
-2. **Review Signals**: Analyze trading signals and confidence levels
-3. **Paper Trading**: Test with paper trading mode enabled
-4. **Strategy Tuning**: Adjust parameters based on performance
-5. **Real Trading**: Enable real trading only after thorough testing
+### Best Practices
 
-## 📞 Support
+1. **Environment Variables**: Never commit private keys
+2. **SSH Access**: Use SSH keys, not passwords
+3. **Firewall**: Only open necessary ports
+4. **Regular Updates**: Keep system and dependencies updated
+5. **Backup**: Regular database backups
 
-For issues or questions:
-1. Check service logs for error messages
-2. Verify all services are running in correct order
-3. Ensure .env file is in project root directory
-4. Confirm ports 8080 and 3000 are available
-5. Test with paper trading before real trading
+### Paper Trading
+
+```bash
+# Enable paper trading mode
+ENABLE_TRADING_EXECUTION=false
+
+# Test with small amounts first
+POSITION_SIZE_PERCENTAGE=0.1
+```
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature-name`
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
+
+### Development Setup
+
+```bash
+# Install development dependencies
+cargo install cargo-watch
+
+# Run with hot reload
+cargo watch -x run
+
+# Run tests
+cargo test
+
+# Check formatting
+cargo fmt
+```
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## ⚠️ Disclaimer
+
+**This software is for educational and research purposes only. Trading cryptocurrencies involves substantial risk of loss. Use at your own risk and never invest more than you can afford to lose.**
+
+- Past performance does not guarantee future results
+- Always test with paper trading first
+- Monitor the bot continuously
+- Understand the risks involved
+
+## 📞 Support
+
+For issues, questions, or contributions:
+
+1. Check the [Troubleshooting](#-troubleshooting) section
+2. Review service logs for error messages
+3. Open an issue on GitHub
+4. Join our community discussions
 
 ---
 
-**⚠️ Disclaimer**: This software is for educational and research purposes. Trading cryptocurrencies involves substantial risk. Use at your own risk and never invest more than you can afford to lose. 
+**Built with ❤️ in Rust for the Solana ecosystem** 
