@@ -274,30 +274,31 @@ impl TradingEngine {
     }
 
     async fn fetch_price_history(&self) -> Result<Vec<PriceFeed>> {
+        use urlencoding::encode;
         // Try to fetch 1-minute candles first for better analysis
         let candle_url = format!("{}/candles/{}/1m?limit=200", 
                                 self.config.database_url, 
-                                self.config.trading_pair);
+                                encode(&self.config.trading_pair));
         
         let response = self.client.get(&candle_url).send().await?;
-        
-        if response.status().is_success() {
-            let api_response: crate::models::ApiResponse<Vec<crate::models::Candle>> = response.json().await?;
-            
+        let text = response.text().await?;
+        debug!("Raw candle response: {}", text);
+        if text.trim().is_empty() {
+            warn!("Candle endpoint returned empty response");
+        }
+        let api_response: Result<crate::models::ApiResponse<Vec<crate::models::Candle>>, _> = serde_json::from_str(&text);
+        if let Ok(api_response) = api_response {
             match api_response {
                 crate::models::ApiResponse { success: true, data: Some(candles), .. } => {
                     if !candles.is_empty() {
                         info!("📊 Using {} 1-minute candles for analysis", candles.len());
-                        
-                        // Convert candles to PriceFeed format for compatibility
                         let prices: Vec<PriceFeed> = candles.into_iter().map(|candle| PriceFeed {
                             id: candle.id,
                             source: "candle".to_string(),
                             pair: candle.pair,
-                            price: candle.close, // Use close price for analysis
+                            price: candle.close,
                             timestamp: candle.timestamp,
                         }).collect();
-                        
                         return Ok(prices);
                     }
                 }
@@ -305,29 +306,29 @@ impl TradingEngine {
                     debug!("No candle data available, falling back to raw prices");
                 }
             }
+        } else {
+            warn!("Failed to parse candle response as JSON");
         }
-        
         // Fallback to raw price data if candles are not available
-        let url = format!("{}/prices/{}", self.config.database_url, self.config.trading_pair);
-        
+        let url = format!("{}/prices/{}", self.config.database_url, encode(&self.config.trading_pair));
         let response = self.client.get(&url).send().await?;
-        
-        if !response.status().is_success() {
-            return Err(anyhow::anyhow!("Failed to fetch price data: {}", response.status()));
+        let text = response.text().await?;
+        debug!("Raw price response: {}", text);
+        if text.trim().is_empty() {
+            warn!("Price endpoint returned empty response");
+            return Ok(vec![]);
         }
-        
-        let api_response: crate::models::ApiResponse<Vec<PriceFeed>> = response.json().await?;
-        
+        let api_response: Result<crate::models::ApiResponse<Vec<PriceFeed>>, _> = serde_json::from_str(&text);
         match api_response {
-            crate::models::ApiResponse { success: true, data: Some(prices), .. } => {
+            Ok(crate::models::ApiResponse { success: true, data: Some(prices), .. }) => {
                 info!("📊 Using {} raw price records for analysis", prices.len());
                 Ok(prices)
             }
-            crate::models::ApiResponse { success: false, error: Some(e), .. } => {
+            Ok(crate::models::ApiResponse { success: false, error: Some(e), .. }) => {
                 Err(anyhow::anyhow!("API error: {}", e))
             }
             _ => {
-                Err(anyhow::anyhow!("Unexpected response format"))
+                Err(anyhow::anyhow!("Unexpected or invalid response format"))
             }
         }
     }
@@ -1030,42 +1031,38 @@ impl TradingEngine {
 
     // Position persistence methods
     async fn fetch_open_positions(&self) -> Result<Option<Position>> {
-        let url = format!("{}/positions/pair/{}/open", self.config.database_url, 
-                         urlencoding::encode(&self.config.trading_pair));
-        
+        use urlencoding::encode;
+        let url = format!("{}/positions/pair/{}/open", self.config.database_url, encode(&self.config.trading_pair));
         let response = self.client.get(&url).send().await?;
-        
-        if response.status().is_success() {
-            let api_response: crate::models::ApiResponse<Option<PositionDb>> = response.json().await?;
-            
-            match api_response {
-                crate::models::ApiResponse { success: true, data: Some(Some(position_db)), .. } => {
-                    let position = Position {
-                        entry_price: position_db.entry_price,
-                        entry_time: position_db.entry_time,
-                        position_type: match position_db.position_type.as_str() {
-                            "long" => PositionType::Long,
-                            "short" => PositionType::Short,
-                            _ => return Err(anyhow!("Invalid position type: {}", position_db.position_type)),
-                        },
-                    };
-                    Ok(Some(position))
-                }
-                crate::models::ApiResponse { success: true, data: Some(None), .. } => {
-                    Ok(None)
-                }
-                crate::models::ApiResponse { success: false, error: Some(e), .. } => {
-                    warn!("Failed to fetch open positions: {}", e);
-                    Ok(None)
-                }
-                _ => {
-                    warn!("Unexpected response format for open positions");
-                    Ok(None)
-                }
+        let text = response.text().await?;
+        debug!("Raw open positions response: {}", text);
+        if text.trim().is_empty() {
+            warn!("Open positions endpoint returned empty response");
+            return Ok(None);
+        }
+        let api_response: Result<crate::models::ApiResponse<Option<PositionDb>>, _> = serde_json::from_str(&text);
+        match api_response {
+            Ok(crate::models::ApiResponse { success: true, data: Some(Some(position_db)), .. }) => {
+                let position = Position {
+                    entry_price: position_db.entry_price,
+                    entry_time: position_db.entry_time,
+                    position_type: match position_db.position_type.as_str() {
+                        "long" => PositionType::Long,
+                        "short" => PositionType::Short,
+                        _ => return Err(anyhow!("Invalid position type: {}", position_db.position_type)),
+                    },
+                };
+                Ok(Some(position))
             }
-        } else {
-            warn!("Failed to fetch open positions: {}", response.status());
-            Ok(None)
+            Ok(crate::models::ApiResponse { success: true, data: Some(None), .. }) => Ok(None),
+            Ok(crate::models::ApiResponse { success: false, error: Some(e), .. }) => {
+                warn!("Failed to fetch open positions: {}", e);
+                Ok(None)
+            }
+            _ => {
+                warn!("Unexpected or invalid response format for open positions");
+                Ok(None)
+            }
         }
     }
 
