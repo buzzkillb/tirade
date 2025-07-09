@@ -706,6 +706,7 @@ impl Database {
             duration_seconds: None,
             created_at: now,
             updated_at: now,
+            current_price: Some(request.entry_price),
         })
     }
 
@@ -804,6 +805,7 @@ impl Database {
             duration_seconds: updated_position.try_get("duration_seconds")?,
             created_at: updated_position.try_get("created_at")?,
             updated_at: updated_position.try_get("updated_at")?,
+            current_price: Some(updated_position.try_get("exit_price").unwrap_or_else(|_| updated_position.try_get("entry_price").unwrap_or(0.0))),
         })
     }
 
@@ -838,6 +840,7 @@ impl Database {
                 duration_seconds: row.try_get("duration_seconds").ok(),
                 created_at: row.try_get("created_at").unwrap_or_default(),
                 updated_at: row.try_get("updated_at").unwrap_or_default(),
+                current_price: Some(row.try_get("entry_price").unwrap_or_default()),
             })
             .collect();
 
@@ -877,6 +880,7 @@ impl Database {
                 duration_seconds: row.try_get("duration_seconds").ok(),
                 created_at: row.try_get("created_at").unwrap_or_default(),
                 updated_at: row.try_get("updated_at").unwrap_or_default(),
+                current_price: Some(row.try_get("entry_price").unwrap_or_default()),
             })
             .collect();
 
@@ -985,6 +989,7 @@ impl Database {
                 duration_seconds: row.try_get("duration_seconds").ok(),
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
+                current_price: Some(row.try_get("entry_price")?),
             })),
             None => Ok(None),
         }
@@ -1032,6 +1037,7 @@ impl Database {
             duration_seconds: row.try_get("duration_seconds").ok(),
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
+            current_price: Some(row.try_get("entry_price")?),
         })
     }
 
@@ -1064,22 +1070,35 @@ impl Database {
 
         let positions: Vec<crate::models::Position> = rows
             .into_iter()
-            .map(|row| crate::models::Position {
-                id: row.try_get("id").unwrap_or_default(),
-                wallet_id: row.try_get("wallet_id").unwrap_or_default(),
-                pair: row.try_get("pair").unwrap_or_default(),
-                position_type: row.try_get("position_type").unwrap_or_default(),
-                entry_price: row.try_get("entry_price").unwrap_or_default(),
-                entry_time: row.try_get("entry_time").unwrap_or_default(),
-                quantity: row.try_get("quantity").unwrap_or_default(),
-                status: row.try_get("status").unwrap_or_default(),
-                exit_price: row.try_get("exit_price").ok(),
-                exit_time: row.try_get("exit_time").ok(),
-                pnl: row.try_get("pnl").ok(),
-                pnl_percent: row.try_get("pnl_percent").ok(),
-                duration_seconds: row.try_get("duration_seconds").ok(),
-                created_at: row.try_get("created_at").unwrap_or_default(),
-                updated_at: row.try_get("updated_at").unwrap_or_default(),
+            .map(|row| {
+                let entry_price: f64 = row.try_get("entry_price").unwrap_or_default();
+                let exit_price: Option<f64> = row.try_get("exit_price").ok();
+                let pnl: Option<f64> = row.try_get("pnl").ok();
+                let pnl_percent: Option<f64> = row.try_get("pnl_percent").ok();
+                
+                // Calculate current price and PnL for dashboard compatibility
+                let current_price = exit_price.unwrap_or(entry_price); // Use exit price if available, otherwise entry price
+                let pnl_value = pnl.unwrap_or(0.0);
+                let pnl_percent_value = pnl_percent.unwrap_or(0.0);
+                
+                crate::models::Position {
+                    id: row.try_get("id").unwrap_or_default(),
+                    wallet_id: row.try_get("wallet_id").unwrap_or_default(),
+                    pair: row.try_get("pair").unwrap_or_default(),
+                    position_type: row.try_get("position_type").unwrap_or_default(),
+                    entry_price,
+                    entry_time: row.try_get("entry_time").unwrap_or_default(),
+                    quantity: row.try_get("quantity").unwrap_or_default(),
+                    status: row.try_get("status").unwrap_or_default(),
+                    exit_price,
+                    exit_time: row.try_get("exit_time").ok(),
+                    pnl: Some(pnl_value), // Always provide a value for dashboard
+                    pnl_percent: Some(pnl_percent_value), // Always provide a value for dashboard
+                    duration_seconds: row.try_get("duration_seconds").ok(),
+                    created_at: row.try_get("created_at").unwrap_or_default(),
+                    updated_at: row.try_get("updated_at").unwrap_or_default(),
+                    current_price: Some(current_price), // Add current_price for dashboard compatibility
+                }
             })
             .collect();
 

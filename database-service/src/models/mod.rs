@@ -76,6 +76,9 @@ pub struct Position {
     pub duration_seconds: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    // Dashboard compatibility fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_price: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
