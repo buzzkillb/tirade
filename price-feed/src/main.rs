@@ -3,6 +3,7 @@ mod config;
 mod database;
 mod error;
 mod price_feed;
+mod models;
 
 use crate::config::Config;
 use crate::error::Result;

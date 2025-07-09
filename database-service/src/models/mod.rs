@@ -128,6 +128,20 @@ pub struct PerformanceMetrics {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Candle {
+    pub id: String,
+    pub pair: String,
+    pub interval: String, // "30s", "1m", "5m", etc.
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+    pub timestamp: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
 // Request/Response models
 #[derive(Debug, Deserialize)]
 pub struct CreateWalletRequest {

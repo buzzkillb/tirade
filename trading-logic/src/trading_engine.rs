@@ -252,17 +252,23 @@ impl TradingEngine {
     }
 
     async fn get_data_point_count(&self) -> Result<usize> {
-        let url = format!("{}/prices/{}", self.config.database_url, self.config.trading_pair);
+        use urlencoding::encode;
+        let url = format!("{}/prices/{}", self.config.database_url, encode(&self.config.trading_pair));
         
         let response = self.client.get(&url).send().await?;
-        let api_response: crate::models::ApiResponse<Vec<PriceFeed>> = response.json().await?;
-        
+        let text = response.text().await?;
+        debug!("Raw data point count response: {}", text);
+        if text.trim().is_empty() {
+            warn!("Data point count endpoint returned empty response");
+            return Ok(0);
+        }
+        let api_response: Result<crate::models::ApiResponse<Vec<PriceFeed>>, _> = serde_json::from_str(&text);
         match api_response {
-            crate::models::ApiResponse { success: true, data: Some(prices), .. } => {
-                info!("📊 API Response - Success: {}, Data points: {}", api_response.success, prices.len());
+            Ok(crate::models::ApiResponse { success: true, data: Some(prices), .. }) => {
+                info!("📊 API Response - Success: {}, Data points: {}", true, prices.len());
                 Ok(prices.len())
             }
-            crate::models::ApiResponse { success: false, error: Some(e), .. } => {
+            Ok(crate::models::ApiResponse { success: false, error: Some(e), .. }) => {
                 warn!("⚠️ API call failed: {}", e);
                 Ok(0)
             }
@@ -334,20 +340,26 @@ impl TradingEngine {
     }
 
     async fn fetch_technical_indicators(&self) -> Result<TechnicalIndicators> {
+        use urlencoding::encode;
         let url = format!(
             "{}/indicators/{}?hours=24",
             self.config.database_url,
-            urlencoding::encode(&self.config.trading_pair)
+            encode(&self.config.trading_pair)
         );
 
         let response = self.client.get(&url).send().await?;
-        let api_response: crate::models::ApiResponse<TechnicalIndicators> = response.json().await?;
-
+        let text = response.text().await?;
+        debug!("Raw technical indicators response: {}", text);
+        if text.trim().is_empty() {
+            warn!("Technical indicators endpoint returned empty response");
+            return Err(anyhow!("Empty response from technical indicators endpoint"));
+        }
+        let api_response: Result<crate::models::ApiResponse<TechnicalIndicators>, _> = serde_json::from_str(&text);
         match api_response {
-            crate::models::ApiResponse { success: true, data: Some(indicators), .. } => {
+            Ok(crate::models::ApiResponse { success: true, data: Some(indicators), .. }) => {
                 Ok(indicators)
             }
-            crate::models::ApiResponse { success: false, error: Some(e), .. } => {
+            Ok(crate::models::ApiResponse { success: false, error: Some(e), .. }) => {
                 Err(anyhow!("Failed to fetch technical indicators: {}", e))
             }
             _ => {

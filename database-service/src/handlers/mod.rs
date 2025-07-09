@@ -485,4 +485,85 @@ pub async fn get_performance_metrics(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+pub async fn get_candles(
+    State(db): State<Arc<Database>>,
+    axum::extract::Path((pair, interval)): axum::extract::Path<(String, String)>,
+    Query(query): Query<serde_json::Value>,
+) -> std::result::Result<Json<ApiResponse<Vec<crate::models::Candle>>>, StatusCode> {
+    let limit = query.get("limit")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(100);
+    
+    match db.get_candles(&pair, &interval, limit).await {
+        Ok(candles) => {
+            info!("Retrieved {} candles for {} {} interval", candles.len(), pair, interval);
+            Ok(Json(ApiResponse::success(candles)))
+        }
+        Err(e) => {
+            warn!("Failed to get candles: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_latest_candle(
+    State(db): State<Arc<Database>>,
+    axum::extract::Path((pair, interval)): axum::extract::Path<(String, String)>,
+) -> std::result::Result<Json<ApiResponse<Option<crate::models::Candle>>>, StatusCode> {
+    match db.get_latest_candle(&pair, &interval).await {
+        Ok(candle) => {
+            Ok(Json(ApiResponse::success(candle)))
+        }
+        Err(e) => {
+            warn!("Failed to get latest candle: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn store_candle(
+    State(db): State<Arc<Database>>,
+    Json(payload): Json<serde_json::Value>,
+) -> std::result::Result<Json<ApiResponse<crate::models::Candle>>, StatusCode> {
+    let pair = payload.get("pair")
+        .and_then(|v| v.as_str())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    
+    let interval = payload.get("interval")
+        .and_then(|v| v.as_str())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    
+    let open = payload.get("open")
+        .and_then(|v| v.as_f64())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    
+    let high = payload.get("high")
+        .and_then(|v| v.as_f64())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    
+    let low = payload.get("low")
+        .and_then(|v| v.as_f64())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    
+    let close = payload.get("close")
+        .and_then(|v| v.as_f64())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    
+    let volume = payload.get("volume")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    
+    match db.store_candle(pair, interval, open, high, low, close, volume).await {
+        Ok(candle) => {
+            info!("Stored candle: {} {} O={:.4}, H={:.4}, L={:.4}, C={:.4}", 
+                  interval, pair, open, high, low, close);
+            Ok(Json(ApiResponse::success(candle)))
+        }
+        Err(e) => {
+            warn!("Failed to store candle: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 } 

@@ -16,6 +16,7 @@ use crate::handlers::{
     get_position_history, create_trading_config, get_trading_config,
     get_open_positions_by_pair, update_position_status,
     get_signals_count, get_active_positions_dashboard, get_recent_trades, get_performance_metrics,
+    get_candles, get_latest_candle, store_candle,
 };
 use axum::{
     routing::{get, post},
@@ -76,6 +77,9 @@ async fn main() -> Result<()> {
         .route("/performance/metrics", get(get_performance_metrics))
         .route("/configs", post(create_trading_config))
         .route("/configs/:name", get(get_trading_config))
+        .route("/candles/:pair/:interval", get(get_candles))
+        .route("/candles/:pair/:interval/latest", get(get_latest_candle))
+        .route("/candles", post(store_candle))
         .layer(cors)
         .with_state(state);
     

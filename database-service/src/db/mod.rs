@@ -201,6 +201,27 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
+        // Create candles table for OHLC data aggregation
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS candles (
+                id TEXT PRIMARY KEY,
+                pair TEXT NOT NULL,
+                interval TEXT NOT NULL,
+                open REAL NOT NULL,
+                high REAL NOT NULL,
+                low REAL NOT NULL,
+                close REAL NOT NULL,
+                volume REAL NOT NULL DEFAULT 0.0,
+                timestamp DATETIME NOT NULL,
+                created_at DATETIME NOT NULL,
+                UNIQUE(pair, interval, timestamp)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         // Create indexes for better performance
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_balance_snapshots_wallet_id ON balance_snapshots(wallet_id)")
             .execute(&self.pool)
@@ -1275,5 +1296,109 @@ impl Database {
         });
 
         Ok(metrics)
+    }
+
+    pub async fn store_candle(&self, pair: &str, interval: &str, open: f64, high: f64, low: f64, close: f64, volume: f64) -> Result<crate::models::Candle> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT OR REPLACE INTO candles (id, pair, interval, open, high, low, close, volume, timestamp, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&id)
+        .bind(pair)
+        .bind(interval)
+        .bind(open)
+        .bind(high)
+        .bind(low)
+        .bind(close)
+        .bind(volume)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(crate::models::Candle {
+            id,
+            pair: pair.to_string(),
+            interval: interval.to_string(),
+            open,
+            high,
+            low,
+            close,
+            volume,
+            timestamp: now,
+            created_at: now,
+        })
+    }
+
+    pub async fn get_candles(&self, pair: &str, interval: &str, limit: i64) -> Result<Vec<crate::models::Candle>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, pair, interval, open, high, low, close, volume, timestamp, created_at
+            FROM candles 
+            WHERE pair = ? AND interval = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(pair)
+        .bind(interval)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let candles: Vec<crate::models::Candle> = rows
+            .into_iter()
+            .map(|row| crate::models::Candle {
+                id: row.try_get("id").unwrap_or_default(),
+                pair: row.try_get("pair").unwrap_or_default(),
+                interval: row.try_get("interval").unwrap_or_default(),
+                open: row.try_get("open").unwrap_or_default(),
+                high: row.try_get("high").unwrap_or_default(),
+                low: row.try_get("low").unwrap_or_default(),
+                close: row.try_get("close").unwrap_or_default(),
+                volume: row.try_get("volume").unwrap_or_default(),
+                timestamp: row.try_get("timestamp").unwrap_or_default(),
+                created_at: row.try_get("created_at").unwrap_or_default(),
+            })
+            .collect();
+
+        Ok(candles)
+    }
+
+    pub async fn get_latest_candle(&self, pair: &str, interval: &str) -> Result<Option<crate::models::Candle>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, pair, interval, open, high, low, close, volume, timestamp, created_at
+            FROM candles 
+            WHERE pair = ? AND interval = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(pair)
+        .bind(interval)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(crate::models::Candle {
+                id: row.try_get("id").unwrap_or_default(),
+                pair: row.try_get("pair").unwrap_or_default(),
+                interval: row.try_get("interval").unwrap_or_default(),
+                open: row.try_get("open").unwrap_or_default(),
+                high: row.try_get("high").unwrap_or_default(),
+                low: row.try_get("low").unwrap_or_default(),
+                close: row.try_get("close").unwrap_or_default(),
+                volume: row.try_get("volume").unwrap_or_default(),
+                timestamp: row.try_get("timestamp").unwrap_or_default(),
+                created_at: row.try_get("created_at").unwrap_or_default(),
+            })),
+            None => Ok(None),
+        }
     }
 } 
