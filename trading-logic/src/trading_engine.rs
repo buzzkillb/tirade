@@ -576,24 +576,22 @@ impl TradingEngine {
     }
 
     async fn post_position(&self, position: &Position, take_profit: f64, stop_loss: f64) -> Result<()> {
-        let position_db = PositionDb {
-            pair: self.config.trading_pair.clone(),
-            position_type: match position.position_type {
-                PositionType::Long => "long".to_string(),
-                PositionType::Short => "short".to_string(),
+        // Create the correct request structure that the database service expects
+        let create_position_request = serde_json::json!({
+            "wallet_address": "default", // You might want to get this from config
+            "pair": self.config.trading_pair,
+            "position_type": match position.position_type {
+                PositionType::Long => "long",
+                PositionType::Short => "short",
             },
-            entry_price: position.entry_price,
-            entry_time: position.entry_time,
-            quantity: 1.0, // Default quantity
-            status: "open".to_string(),
-            take_profit,
-            stop_loss,
-        };
+            "entry_price": position.entry_price,
+            "quantity": position.quantity,
+        });
 
         let url = format!("{}/positions", self.config.database_url);
         
         let response = self.client.post(&url)
-            .json(&position_db)
+            .json(&create_position_request)
             .send()
             .await?;
             
