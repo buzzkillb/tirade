@@ -2733,11 +2733,9 @@ async fn index() -> Result<HttpResponse> {
         // Function to fetch prices from multiple exchanges
         async function fetchExchangePrices() {
             try {
-                const [binanceResponse, coinbaseResponse, pythResponse, jupiterResponse] = await Promise.allSettled([
+                const [binanceResponse, pythResponse] = await Promise.allSettled([
                     fetch('https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT'),
-                    fetch('https://api.coinbase.com/v2/prices/SOL-USD/spot'),
-                    fetch('/api/dashboard'), // Pyth price from your existing dashboard API
-                    fetch('http://localhost:8080/prices/SOL%2FUSDC/latest?source=jupiter') // Jupiter price directly from database
+                    fetch('/api/dashboard') // Pyth price from your existing dashboard API
                 ]);
 
                 const prices = {};
@@ -2754,18 +2752,6 @@ async fn index() -> Result<HttpResponse> {
                     }
                 }
 
-                // Coinbase price
-                if (coinbaseResponse.status === 'fulfilled' && coinbaseResponse.value.ok) {
-                    try {
-                        const coinbaseData = await coinbaseResponse.value.json();
-                        if (coinbaseData.data && coinbaseData.data.amount) {
-                            prices.coinbase = parseFloat(coinbaseData.data.amount);
-                        }
-                    } catch (e) {
-                        console.log('Coinbase data parse error:', e);
-                    }
-                }
-
                 // Pyth price from your price feed
                 if (pythResponse.status === 'fulfilled' && pythResponse.value.ok) {
                     try {
@@ -2779,19 +2765,6 @@ async fn index() -> Result<HttpResponse> {
                         }
                     } catch (e) {
                         console.log('Pyth data parse error:', e);
-                    }
-                }
-
-                // Jupiter price from your price feed
-                if (jupiterResponse.status === 'fulfilled' && jupiterResponse.value.ok) {
-                    try {
-                        const jupiterData = await jupiterResponse.value.json();
-                        // Jupiter price is directly in the data field
-                        if (jupiterData.data && jupiterData.data.price) {
-                            prices.jupiter = parseFloat(jupiterData.data.price);
-                        }
-                    } catch (e) {
-                        console.log('Jupiter data parse error:', e);
                     }
                 }
 
@@ -2830,16 +2803,7 @@ async fn index() -> Result<HttpResponse> {
                         </div>
                     `;
                 }
-                // Coinbase - only show if price is available
-                if (prices.coinbase) {
-                    priceHtml += `
-                        <div style="background: linear-gradient(145deg, #0a0a0a, #1a1a1a); border: 1px solid #0052ff; border-radius: 10px; padding: 15px; text-align: center;">
-                            <div style="color: #0052ff; font-size: 1.1rem; font-weight: bold; margin-bottom: 10px;">Coinbase</div>
-                            <div style="color: #14f195; font-size: 1.5rem; font-weight: bold;">$${prices.coinbase.toFixed(4)}</div>
-                            <div style="color: #888; font-size: 0.8rem; margin-top: 5px;">SOL/USD</div>
-                        </div>
-                    `;
-                }
+
                 // Pyth - only show if price is available
                 if (prices.pyth) {
                     priceHtml += `
@@ -2850,16 +2814,7 @@ async fn index() -> Result<HttpResponse> {
                         </div>
                     `;
                 }
-                // JUP - only show if price is available
-                if (prices.jupiter) {
-                    priceHtml += `
-                        <div style="background: linear-gradient(145deg, #0a0a0a, #1a1a1a); border: 1px solid #ff6b35; border-radius: 10px; padding: 15px; text-align: center;">
-                            <div style="color: #ff6b35; font-size: 1.1rem; font-weight: bold; margin-bottom: 10px;">JUP</div>
-                            <div style="color: #14f195; font-size: 1.5rem; font-weight: bold;">$${prices.jupiter.toFixed(4)}</div>
-                            <div style="color: #888; font-size: 0.8rem; margin-top: 5px;">SOL/USDC</div>
-                        </div>
-                    `;
-                }
+
                 
                 priceHtml += '</div>';
                 
@@ -2871,7 +2826,7 @@ async fn index() -> Result<HttpResponse> {
             // Also update the main price display with the first available price
             const priceElement = document.getElementById('current-price');
             if (priceElement && Object.keys(prices).length > 0) {
-                const firstPrice = prices.binance || prices.coinbase || prices.pyth || prices.jupiter;
+                const firstPrice = prices.binance || prices.pyth;
                 if (firstPrice) {
                     priceElement.innerHTML = `$${firstPrice.toFixed(4)}<span style="color: #14f195; font-size: 0.8rem; margin-left: 8px; animation: pulse 1s ease-in-out infinite;">●</span>`;
                 }
