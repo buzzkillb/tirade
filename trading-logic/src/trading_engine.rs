@@ -1180,17 +1180,28 @@ impl TradingEngine {
     // Position persistence methods
     async fn fetch_open_positions(&self) -> Result<Option<Position>> {
         use urlencoding::encode;
-        let url = format!("{}/positions/pair/{}/open", self.config.database_url, encode(&self.config.trading_pair));
+        let encoded_pair = encode(&self.config.trading_pair);
+        let url = format!("{}/positions/pair/{}/open", self.config.database_url, encoded_pair);
+        
+        info!("🔍 Fetching open positions from: {}", url);
+        info!("🔍 Trading pair: '{}' -> encoded: '{}'", self.config.trading_pair, encoded_pair);
+        
         let response = self.client.get(&url).send().await?;
+        let status = response.status();
         let text = response.text().await?;
-        debug!("Raw open positions response: {}", text);
+        
+        info!("🔍 Database response status: {}", status);
+        info!("🔍 Database response body: {}", text);
+        
         if text.trim().is_empty() {
             warn!("Open positions endpoint returned empty response");
             return Ok(None);
         }
+        
         let api_response: Result<crate::models::ApiResponse<Option<PositionDb>>, _> = serde_json::from_str(&text);
         match api_response {
             Ok(crate::models::ApiResponse { success: true, data: Some(Some(position_db)), .. }) => {
+                info!("✅ Successfully found open position in database");
                 let position = Position {
                     entry_price: position_db.entry_price,
                     entry_time: position_db.entry_time,
@@ -1202,13 +1213,17 @@ impl TradingEngine {
                 };
                 Ok(Some(position))
             }
-            Ok(crate::models::ApiResponse { success: true, data: Some(None), .. }) => Ok(None),
+            Ok(crate::models::ApiResponse { success: true, data: Some(None), .. }) => {
+                info!("💤 Database confirmed no open positions");
+                Ok(None)
+            }
             Ok(crate::models::ApiResponse { success: false, error: Some(e), .. }) => {
-                warn!("Failed to fetch open positions: {}", e);
+                warn!("❌ Database error: {}", e);
                 Ok(None)
             }
             _ => {
-                warn!("Unexpected or invalid response format for open positions");
+                warn!("❌ Unexpected or invalid response format for open positions");
+                warn!("❌ Raw response: {}", text);
                 Ok(None)
             }
         }
