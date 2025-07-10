@@ -211,7 +211,9 @@ impl PriceFeedService {
             _ => return Err(crate::error::PriceFeedError::ConfigError("Invalid interval".to_string())),
         };
         
-        let cutoff_time = now - chrono::Duration::seconds(interval_seconds as i64);
+        // Extend the time window to ensure we get enough data
+        let extended_seconds = interval_seconds * 3; // Look back 3x the interval
+        let cutoff_time = now - chrono::Duration::seconds(extended_seconds as i64);
         
         info!("🕯️  Aggregating {} candles for {} (cutoff: {}, now: {})", interval, pair, cutoff_time, now);
         

@@ -38,6 +38,20 @@ pub struct TechnicalIndicator {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CandleData {
+    pub id: String,
+    pub pair: String,
+    pub interval: String,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+    pub timestamp: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TradingSignal {
     pub id: String,
     pub pair: String,
@@ -50,6 +64,7 @@ pub struct TradingSignal {
     pub stop_loss: Option<f64>,
     pub executed: bool,
     pub created_at: DateTime<Utc>,
+    pub candle_data: Option<CandleData>, // New field for candle information
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -506,7 +521,25 @@ async fn fetch_signals(client: &reqwest::Client, database_url: &str) -> Result<V
     
     if let Ok(api_response) = response.json::<serde_json::Value>().await {
         if let Some(signals_array) = api_response["data"].as_array() {
-            if let Ok(signals) = serde_json::from_value::<Vec<TradingSignal>>(serde_json::Value::Array(signals_array.clone())) {
+            if let Ok(mut signals) = serde_json::from_value::<Vec<TradingSignal>>(serde_json::Value::Array(signals_array.clone())) {
+                // Enhance signals with candle data
+                for signal in &mut signals {
+                    // Fetch the latest 1-minute candle for this signal's timestamp
+                    if let Ok(candle_response) = client
+                        .get(&format!("{}/candles/SOL%2FUSDC/1m/latest", database_url))
+                        .timeout(Duration::from_secs(3))
+                        .send()
+                        .await
+                    {
+                        if let Ok(candle_api_response) = candle_response.json::<serde_json::Value>().await {
+                            if let Some(candle_data) = candle_api_response["data"].as_object() {
+                                if let Ok(candle) = serde_json::from_value::<CandleData>(serde_json::Value::Object(candle_data.clone())) {
+                                    signal.candle_data = Some(candle);
+                                }
+                            }
+                        }
+                    }
+                }
                 return Ok(signals);
             }
         }
@@ -1280,6 +1313,123 @@ async fn index() -> Result<HttpResponse> {
         .detail-value.neutral {
             color: #9945ff;
         }
+
+        /* Candle Information Styles */
+        .candle-info {
+            margin: 10px 0;
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .candle-info.candle-bullish {
+            border-color: rgba(20, 241, 149, 0.3);
+            background: linear-gradient(145deg, rgba(20, 241, 149, 0.05), rgba(0, 0, 0, 0.3));
+        }
+
+        .candle-info.candle-bearish {
+            border-color: rgba(255, 107, 107, 0.3);
+            background: linear-gradient(145deg, rgba(255, 107, 107, 0.05), rgba(0, 0, 0, 0.3));
+        }
+
+        .candle-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .candle-icon {
+            font-size: 1.2rem;
+            color: #9945ff;
+        }
+
+        .candle-interval {
+            font-size: 0.85rem;
+            font-weight: bold;
+            color: #14f195;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .candle-time {
+            font-size: 0.75rem;
+            color: #888;
+            margin-left: auto;
+        }
+
+        .candle-ohlc {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .ohlc-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 6px;
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .ohlc-label {
+            font-size: 0.7rem;
+            color: #888;
+            font-weight: bold;
+            text-transform: uppercase;
+            margin-bottom: 2px;
+        }
+
+        .ohlc-value {
+            font-size: 0.8rem;
+            color: #fff;
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+        }
+
+        .candle-metrics {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+        }
+
+        .candle-metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 6px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .metric-label {
+            font-size: 0.7rem;
+            color: #888;
+            font-weight: 500;
+        }
+
+        .metric-value {
+            font-size: 0.7rem;
+            color: #fff;
+            font-weight: bold;
+        }
+
+        .metric-value.positive {
+            color: #14f195;
+        }
+
+        .metric-value.negative {
+            color: #ff6b6b;
+        }
         
         @keyframes buySignalGlow {
             0%, 100% {
@@ -1885,6 +2035,58 @@ async fn index() -> Result<HttpResponse> {
                 // Parse signal triggers from reasoning
                 const triggers = parseSignalTriggers(signal.reasoning);
                 
+                // Add candle information display
+                let candleInfo = '';
+                if (signal.candle_data) {
+                    const candle = signal.candle_data;
+                    const candleRange = ((candle.high - candle.low) / candle.low) * 100;
+                    const candleBody = ((candle.close - candle.open) / candle.open) * 100;
+                    const isBullish = candle.close > candle.open;
+                    const candleClass = isBullish ? 'candle-bullish' : 'candle-bearish';
+                    
+                    candleInfo = `
+                        <div class="candle-info ${candleClass}">
+                            <div class="candle-header">
+                                <span class="candle-icon">🕯️</span>
+                                <span class="candle-interval">1m Candle</span>
+                                <span class="candle-time">${new Date(candle.timestamp).toLocaleTimeString()}</span>
+                            </div>
+                            <div class="candle-ohlc">
+                                <div class="ohlc-item">
+                                    <span class="ohlc-label">O:</span>
+                                    <span class="ohlc-value">$${candle.open.toFixed(4)}</span>
+                                </div>
+                                <div class="ohlc-item">
+                                    <span class="ohlc-label">H:</span>
+                                    <span class="ohlc-value">$${candle.high.toFixed(4)}</span>
+                                </div>
+                                <div class="ohlc-item">
+                                    <span class="ohlc-label">L:</span>
+                                    <span class="ohlc-value">$${candle.low.toFixed(4)}</span>
+                                </div>
+                                <div class="ohlc-item">
+                                    <span class="ohlc-label">C:</span>
+                                    <span class="ohlc-value">$${candle.close.toFixed(4)}</span>
+                                </div>
+                            </div>
+                            <div class="candle-metrics">
+                                <div class="candle-metric">
+                                    <span class="metric-label">Range:</span>
+                                    <span class="metric-value">${candleRange.toFixed(2)}%</span>
+                                </div>
+                                <div class="candle-metric">
+                                    <span class="metric-label">Body:</span>
+                                    <span class="metric-value ${isBullish ? 'positive' : 'negative'}">${candleBody > 0 ? '+' : ''}${candleBody.toFixed(2)}%</span>
+                                </div>
+                                <div class="candle-metric">
+                                    <span class="metric-label">Volume:</span>
+                                    <span class="metric-value">${candle.volume.toFixed(2)}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+                
                 return `
                     <div class="signal-item signal-${signalClass} ${newClass}" data-signal-id="${signal.id}">
                         <div><strong>${signal.signal_type.toUpperCase()}</strong> - ${(signal.confidence * 100).toFixed(1)}% confidence</div>
@@ -1894,6 +2096,7 @@ async fn index() -> Result<HttpResponse> {
                                 ${priceChangeSpans}
                             </div>
                         </div>
+                        ${candleInfo}
                         <div class="signal-triggers">
                             <div class="triggers-label">Signal Triggers:</div>
                             <div class="triggers-grid">
