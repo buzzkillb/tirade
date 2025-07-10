@@ -3,6 +3,7 @@ use crate::error::{PriceFeedError, Result};
 use reqwest::Client;
 use serde_json::json;
 use tracing::{error, info};
+use urlencoding::encode;
 
 pub struct DatabaseClient {
     client: Client,
@@ -70,9 +71,10 @@ impl DatabaseClient {
     }
 
     pub async fn get_prices_since(&self, pair: &str, since: chrono::DateTime<chrono::Utc>) -> Result<Vec<crate::models::PriceFeed>> {
+        let encoded_pair = encode(pair);
         let url = format!("{}/prices/{}/history?hours={}", 
                          self.base_url, 
-                         pair, 
+                         encoded_pair, 
                          (chrono::Utc::now() - since).num_hours() + 1);
         
         let response = self.client
