@@ -367,16 +367,25 @@ impl TradingExecutor {
         let mut sol_change = None;
         let mut usdc_change = None;
         
+        info!("🔍 Parsing transaction output for SOL/USDC changes...");
+        
         for line in output.lines() {
+            info!("🔍 Parsing line: '{}'", line.trim());
+            
             if line.contains("Transaction Signature:") || line.contains("Signature:") {
                 signature = line.split(':').nth(1).map(|s| s.trim().to_string());
-            } else if line.contains("SOL: ") && line.contains("(received)") {
+                info!("📝 Found signature: {:?}", signature);
+            } else if line.contains("SOL:") && line.contains("(received)") {
+                // Look for pattern like "  SOL: 0.123456 SOL (received)"
                 if let Some(change_str) = line.split("SOL:").nth(1) {
                     if let Some(num_str) = change_str.split("SOL").next() {
-                        sol_change = num_str.trim().parse::<f64>().ok();
+                        let parsed = num_str.trim().parse::<f64>();
+                        sol_change = parsed.ok();
+                        info!("🟢 Found SOL change: {:?} (parsed from '{}')", sol_change, num_str.trim());
                     }
                 }
-            } else if line.contains("USDC: ") && (line.contains("(spent)") || line.contains("(received)")) {
+            } else if line.contains("USDC:") && (line.contains("(spent)") || line.contains("(received)")) {
+                // Look for pattern like "  USDC: 100.00 USDC (spent)"
                 if let Some(change_str) = line.split("USDC:").nth(1) {
                     if let Some(num_str) = change_str.split("USDC").next() {
                         let mut change = num_str.trim().parse::<f64>().unwrap_or(0.0);
@@ -384,10 +393,13 @@ impl TradingExecutor {
                             change = -change; // Make spent amounts negative
                         }
                         usdc_change = Some(change);
+                        info!("🟢 Found USDC change: {:?} (parsed from '{}')", usdc_change, num_str.trim());
                     }
                 }
             }
         }
+        
+        info!("📊 Parsing results - SOL: {:?}, USDC: {:?}, Signature: {:?}", sol_change, usdc_change, signature);
         
         Ok(TransactionResult {
             success: true,
