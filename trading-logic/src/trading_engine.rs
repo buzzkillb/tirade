@@ -887,7 +887,7 @@ impl TradingEngine {
         let mut losses = 0.0;
         
         // Calculate initial average gain and loss
-        for i in 1..15 {
+        for i in 1..14 {
             let change = prices[i] - prices[i - 1];
             if change > 0.0 {
                 gains += change;
