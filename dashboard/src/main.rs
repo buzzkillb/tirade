@@ -1207,6 +1207,22 @@ async fn index() -> Result<HttpResponse> {
             font-family: 'Courier New', monospace;
         }
 
+        .reasoning-item {
+            margin: 4px 0;
+            padding: 4px 8px;
+            background: rgba(153, 69, 255, 0.1);
+            border-radius: 4px;
+            border-left: 3px solid #9945ff;
+            font-size: 0.75rem;
+            color: #e0e0e0;
+            transition: all 0.2s ease;
+        }
+
+        .reasoning-item:hover {
+            background: rgba(153, 69, 255, 0.2);
+            border-left-color: #14f195;
+        }
+
         /* Signal Details Styles */
         .signal-details {
             margin: 10px 0;
@@ -1909,11 +1925,30 @@ async fn index() -> Result<HttpResponse> {
                                     <input type="checkbox" ${triggers.trendFollowing ? 'checked' : ''} disabled>
                                     <span>Trend Following</span>
                                 </label>
+                                <label class="trigger-checkbox ${triggers.dynamicThresholds ? 'active' : ''}">
+                                    <input type="checkbox" ${triggers.dynamicThresholds ? 'checked' : ''} disabled>
+                                    <span>Dynamic Thresholds</span>
+                                </label>
+                                <label class="trigger-checkbox ${triggers.marketRegime ? 'active' : ''}">
+                                    <input type="checkbox" ${triggers.marketRegime ? 'checked' : ''} disabled>
+                                    <span>Market Regime</span>
+                                </label>
+                                <label class="trigger-checkbox ${triggers.supportResistance ? 'active' : ''}">
+                                    <input type="checkbox" ${triggers.supportResistance ? 'checked' : ''} disabled>
+                                    <span>Support/Resistance</span>
+                                </label>
                             </div>
                         </div>
                         <div class="signal-reasoning">
                             <div class="reasoning-label">Detailed Analysis:</div>
-                            <div class="reasoning-text">${Array.isArray(signal.reasoning) ? signal.reasoning.join('<br>') : signal.reasoning}</div>
+                            <div class="reasoning-text">
+                                ${Array.isArray(signal.reasoning) ? 
+                                    signal.reasoning.map(reason => 
+                                        `<div class="reasoning-item">• ${reason}</div>`
+                                    ).join('') : 
+                                    `<div class="reasoning-item">• ${signal.reasoning}</div>`
+                                }
+                            </div>
                         </div>
                         <div class="signal-details">
                             <div class="details-label">Signal Details:</div>
@@ -1964,40 +1999,77 @@ async fn index() -> Result<HttpResponse> {
                 meanReversion: false,
                 rsiThreshold: false,
                 momentumConfirmation: false,
-                trendFollowing: false
+                trendFollowing: false,
+                dynamicThresholds: false,
+                marketRegime: false,
+                supportResistance: false
             };
 
             // Convert reasoning to string if it's an array
             const reasoningText = Array.isArray(reasoning) ? reasoning.join(' ') : reasoning;
 
-            // Check for each trigger type based on the reasoning text
+            // Enhanced trigger detection for new trading logic
             if (reasoningText.includes('RSI divergence') || 
                 (reasoningText.includes('Fast RSI') && reasoningText.includes('Slow RSI')) ||
-                reasoningText.includes('RSI divergence: Fast RSI')) {
+                reasoningText.includes('RSI divergence: Fast RSI') ||
+                reasoningText.includes('RSI divergence detected')) {
                 triggers.rsiDivergence = true;
             }
             if (reasoningText.includes('uptrend') || 
                 reasoningText.includes('downtrend') || 
                 reasoningText.includes('SMA ratio') ||
-                reasoningText.includes('Moving average crossover')) {
+                reasoningText.includes('Moving average crossover') ||
+                reasoningText.includes('SMA') ||
+                reasoningText.includes('trend strength')) {
                 triggers.movingAverage = true;
             }
             if (reasoningText.includes('Volatility breakout') || 
                 (reasoningText.includes('volatility') && reasoningText.includes('momentum')) ||
-                reasoningText.includes('volatility breakout')) {
+                reasoningText.includes('volatility breakout') ||
+                reasoningText.includes('volatility')) {
                 triggers.volatilityBreakout = true;
             }
             if (reasoningText.includes('Mean reversion') || 
                 reasoningText.includes('Extreme oversold') || 
                 reasoningText.includes('Extreme overbought') ||
-                reasoningText.includes('Mean reversion: Extreme oversold')) {
+                reasoningText.includes('Mean reversion: Extreme oversold') ||
+                reasoningText.includes('oversold') ||
+                reasoningText.includes('overbought')) {
                 triggers.meanReversion = true;
             }
             if (reasoningText.includes('RSI overbought') || 
                 reasoningText.includes('RSI oversold') ||
                 reasoningText.includes('RSI oversold: RSI') ||
-                reasoningText.includes('RSI overbought: RSI')) {
+                reasoningText.includes('RSI overbought: RSI') ||
+                reasoningText.includes('RSI threshold')) {
                 triggers.rsiThreshold = true;
+            }
+            if (reasoningText.includes('momentum') || 
+                reasoningText.includes('momentum confirmation') ||
+                reasoningText.includes('price momentum')) {
+                triggers.momentumConfirmation = true;
+            }
+            if (reasoningText.includes('trend following') || 
+                reasoningText.includes('trend strength') ||
+                reasoningText.includes('market regime')) {
+                triggers.trendFollowing = true;
+            }
+            if (reasoningText.includes('dynamic threshold') || 
+                reasoningText.includes('dynamic take profit') ||
+                reasoningText.includes('dynamic stop loss')) {
+                triggers.dynamicThresholds = true;
+            }
+            if (reasoningText.includes('market regime') || 
+                reasoningText.includes('trending') ||
+                reasoningText.includes('consolidating') ||
+                reasoningText.includes('volatile')) {
+                triggers.marketRegime = true;
+            }
+            if (reasoningText.includes('support') || 
+                reasoningText.includes('resistance') ||
+                reasoningText.includes('support level') ||
+                reasoningText.includes('resistance level')) {
+                triggers.supportResistance = true;
             }
             if (reasoningText.includes('Momentum confirmation') || 
                 reasoningText.includes('price increase') || 
