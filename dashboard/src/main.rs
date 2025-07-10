@@ -480,8 +480,8 @@ async fn index() -> Result<HttpResponse> {
                     <div class="trade-details">
                         Entry: $${position.entry_price.toFixed(4)} | 
                         Quantity: ${position.quantity.toFixed(6)} SOL<br>
-                        Current PnL: <span class="${position.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">
-                            ${position.pnl >= 0 ? '+' : ''}${(position.pnl * 100).toFixed(2)}%
+                        Current PnL: <span class="${position.pnl_percent >= 0 ? 'pnl-positive' : 'pnl-negative'}">
+                            ${position.pnl_percent >= 0 ? '+' : ''}${position.pnl_percent.toFixed(2)}%
                         </span><br>
                         Status: ${position.status}
                     </div>
