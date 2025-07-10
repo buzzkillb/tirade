@@ -2733,24 +2733,11 @@ async fn index() -> Result<HttpResponse> {
         // Function to fetch prices from multiple exchanges
         async function fetchExchangePrices() {
             try {
-                const [binanceResponse, pythResponse] = await Promise.allSettled([
-                    fetch('https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT'),
+                const [pythResponse] = await Promise.allSettled([
                     fetch('/api/dashboard') // Pyth price from your existing dashboard API
                 ]);
 
                 const prices = {};
-
-                // Binance price
-                if (binanceResponse.status === 'fulfilled' && binanceResponse.value.ok) {
-                    try {
-                        const binanceData = await binanceResponse.value.json();
-                        if (binanceData.price) {
-                            prices.binance = parseFloat(binanceData.price);
-                        }
-                    } catch (e) {
-                        console.log('Binance data parse error:', e);
-                    }
-                }
 
                 // Pyth price from your price feed
                 if (pythResponse.status === 'fulfilled' && pythResponse.value.ok) {
@@ -2793,16 +2780,7 @@ async fn index() -> Result<HttpResponse> {
                 
                 let priceHtml = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">';
                 
-                // Binance - only show if price is available
-                if (prices.binance) {
-                    priceHtml += `
-                        <div style="background: linear-gradient(145deg, #0a0a0a, #1a1a1a); border: 1px solid #f7931a; border-radius: 10px; padding: 15px; text-align: center;">
-                            <div style="color: #f7931a; font-size: 1.1rem; font-weight: bold; margin-bottom: 10px;">Binance</div>
-                            <div style="color: #14f195; font-size: 1.5rem; font-weight: bold;">$${prices.binance.toFixed(4)}</div>
-                            <div style="color: #888; font-size: 0.8rem; margin-top: 5px;">SOL/USDT</div>
-                        </div>
-                    `;
-                }
+
 
                 // Pyth - only show if price is available
                 if (prices.pyth) {
@@ -2826,7 +2804,7 @@ async fn index() -> Result<HttpResponse> {
             // Also update the main price display with the first available price
             const priceElement = document.getElementById('current-price');
             if (priceElement && Object.keys(prices).length > 0) {
-                const firstPrice = prices.binance || prices.pyth;
+                const firstPrice = prices.pyth;
                 if (firstPrice) {
                     priceElement.innerHTML = `$${firstPrice.toFixed(4)}<span style="color: #14f195; font-size: 0.8rem; margin-left: 8px; animation: pulse 1s ease-in-out infinite;">●</span>`;
                 }
