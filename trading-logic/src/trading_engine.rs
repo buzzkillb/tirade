@@ -1341,22 +1341,35 @@ impl TradingEngine {
         let encoded_pair = encode(&self.config.trading_pair);
         let url = format!("{}/positions/pair/{}/open", self.config.database_url, encoded_pair);
         
+        info!("🔍 Attempting to close position in database:");
+        info!("  📍 URL: {}", url);
+        info!("  🎯 Trading pair: {}", self.config.trading_pair);
+        info!("  🔗 Encoded pair: {}", encoded_pair);
+        info!("  💰 Exit price: ${:.4}", exit_price);
+        
         let response = self.client.get(&url).send().await?;
+        info!("  📡 Response status: {}", response.status());
+        
         if !response.status().is_success() {
-            warn!("Failed to get open position: {}", response.status());
+            warn!("❌ Failed to get open position: {}", response.status());
             return Ok(());
         }
         
         let api_response: serde_json::Value = response.json().await?;
+        info!("  📊 API Response: {}", serde_json::to_string_pretty(&api_response)?);
         
         // Check if data is null (no position found)
         if api_response["data"].is_null() {
-            warn!("No open position found to close");
+            warn!("❌ No open position found to close");
             return Ok(());
         }
         
         if let Some(position_data) = api_response["data"].as_object() {
+            info!("  ✅ Found position data: {}", serde_json::to_string_pretty(position_data)?);
+            
             if let Some(position_id) = position_data["id"].as_str() {
+                info!("  🆔 Position ID: {}", position_id);
+                
                 // Now close the position using the correct ID
                 let close_request = json!({
                     "position_id": position_id,
@@ -1366,23 +1379,30 @@ impl TradingEngine {
                 });
                 
                 let close_url = format!("{}/positions/close", self.config.database_url);
+                info!("  🔗 Close URL: {}", close_url);
+                info!("  📤 Close request: {}", serde_json::to_string_pretty(&close_request)?);
+                
                 let close_response = self.client.post(&close_url)
                     .json(&close_request)
                     .send()
                     .await?;
                     
+                info!("  📡 Close response status: {}", close_response.status());
+                
                 if !close_response.status().is_success() {
                     let status = close_response.status();
                     let text = close_response.text().await.unwrap_or_default();
-                    warn!("Failed to close position in database: {} - {}", status, text);
+                    warn!("❌ Failed to close position in database: {} - {}", status, text);
                 } else {
-                    debug!("Closed position {} in database at price: {}", position_id, exit_price);
+                    let response_text = close_response.text().await.unwrap_or_default();
+                    info!("✅ Successfully closed position {} in database at price: {}", position_id, exit_price);
+                    info!("  📊 Close response: {}", response_text);
                 }
             } else {
-                warn!("No position ID found in response");
+                warn!("❌ No position ID found in response");
             }
         } else {
-            warn!("Invalid position data format in response");
+            warn!("❌ Invalid position data format in response");
         }
         
         Ok(())
