@@ -822,7 +822,7 @@ impl TradingEngine {
     }
 
     fn calculate_consolidated_indicators(&self, prices: &[PriceFeed], strategy_indicators: &crate::models::TradingIndicators) -> crate::models::TechnicalIndicators {
-        let current_price = prices.last().map(|p| p.price).unwrap_or(0.0);
+        let current_price = prices.first().map(|p| p.price).unwrap_or(0.0);
         let now = Utc::now();
         
         // Calculate RSI14 (dashboard expects RSI14, not RSI7/21)
