@@ -1059,7 +1059,7 @@ impl TradingEngine {
                 PositionType::Short => "short",
             },
             "entry_price": position.entry_price,
-            "quantity": 1.0, // Default quantity since Position struct doesn't have quantity field
+            "quantity": position.quantity, // Use the actual quantity from the position
         });
 
         let url = format!("{}/positions", self.config.database_url);
