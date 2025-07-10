@@ -214,7 +214,7 @@ async fn index() -> Result<HttpResponse> {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            color: #333;
+            color: #e0e0e0;
         }
         
         .container {
@@ -243,11 +243,13 @@ async fn index() -> Result<HttpResponse> {
         }
         
         .card {
-            background: white;
+            background: rgba(20, 20, 30, 0.9);
             border-radius: 15px;
             padding: 25px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
             transition: transform 0.3s ease;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
         }
         
         .card:hover {
@@ -255,10 +257,10 @@ async fn index() -> Result<HttpResponse> {
         }
         
         .card h2 {
-            color: #667eea;
+            color: #ffffff;
             margin-bottom: 15px;
             font-size: 1.5rem;
-            border-bottom: 2px solid #f0f0f0;
+            border-bottom: 2px solid rgba(255,255,255,0.2);
             padding-bottom: 10px;
         }
         
@@ -314,27 +316,30 @@ async fn index() -> Result<HttpResponse> {
         }
         
         .pnl-positive {
-            color: #28a745;
+            color: #4ade80;
+            font-weight: bold;
         }
         
         .pnl-negative {
-            color: #dc3545;
+            color: #f87171;
+            font-weight: bold;
         }
         
         .trade-item {
-            background: #f8f9fa;
+            background: rgba(40, 40, 50, 0.8);
             border-radius: 8px;
             padding: 15px;
             margin-bottom: 10px;
             border-left: 4px solid #667eea;
+            backdrop-filter: blur(5px);
         }
         
         .trade-buy {
-            border-left-color: #28a745;
+            border-left-color: #4ade80;
         }
         
         .trade-sell {
-            border-left-color: #dc3545;
+            border-left-color: #f87171;
         }
         
         .trade-type {
@@ -344,15 +349,16 @@ async fn index() -> Result<HttpResponse> {
         
         .trade-details {
             font-size: 0.9rem;
-            color: #666;
+            color: #b0b0b0;
         }
         
         .position-item {
-            background: #f8f9fa;
+            background: rgba(40, 40, 50, 0.8);
             border-radius: 8px;
             padding: 15px;
             margin-bottom: 10px;
             border-left: 4px solid #ffc107;
+            backdrop-filter: blur(5px);
         }
         
         .refresh-btn {
@@ -372,7 +378,7 @@ async fn index() -> Result<HttpResponse> {
         
         .loading {
             text-align: center;
-            color: #666;
+            color: #b0b0b0;
             font-style: italic;
         }
         
