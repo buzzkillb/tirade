@@ -1,4 +1,3 @@
-use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, Signer},
@@ -6,16 +5,179 @@ use solana_sdk::{
     program_pack::Pack,
 };
 use solana_sdk::signers::Signers;
+use solana_client::rpc_client::RpcClient;
 use bincode;
 use base64::Engine;
 use std::str::FromStr;
-use tracing::info;
-
+use tracing::{info, warn, error};
 use crate::transaction::{
     config::Config,
     error::TransactionError,
     types::{Args, JupiterQuote},
 };
+
+#[derive(Debug, Clone)]
+pub enum TransactionStatus {
+    Pending,
+    Confirmed,
+    Failed,
+    NotFound,
+    Unknown,
+}
+
+// Enhanced balance change detection with tolerance
+async fn wait_for_balance_change(
+    client: &RpcClient,
+    wallet: &Keypair,
+    config: &Config,
+    initial_sol_balance: f64,
+    initial_usdc_balance: f64,
+    direction: &str,
+    max_attempts: u32,
+) -> Result<bool, TransactionError> {
+    let mut attempts = 0;
+    
+    while attempts < max_attempts {
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        attempts += 1;
+        
+        let current_sol = get_sol_balance(client, &wallet.pubkey())?;
+        let current_usdc = get_usdc_balance(client, &wallet.pubkey(), &config.usdc_mint)?;
+        
+        // Check for expected balance changes with tolerance
+        if direction == "usdc-to-sol" {
+            if current_sol > (initial_sol_balance + 0.001) { // At least 0.001 SOL received
+                info!("✅ Balance change detected! SOL: {:.6} → {:.6} (+{:.6})", 
+                      initial_sol_balance, current_sol, current_sol - initial_sol_balance);
+                return Ok(true);
+            }
+        } else {
+            if current_usdc > (initial_usdc_balance + 0.01) { // At least 0.01 USDC received
+                info!("✅ Balance change detected! USDC: {:.2} → {:.2} (+{:.2})", 
+                      initial_usdc_balance, current_usdc, current_usdc - initial_usdc_balance);
+                return Ok(true);
+            }
+        }
+        
+        info!("⏳ Waiting for balance change (attempt {}/{}): SOL: {:.6}, USDC: {:.2}", 
+              attempts, max_attempts, current_sol, current_usdc);
+    }
+    
+    info!("⚠️  No balance change detected after {} attempts", max_attempts);
+    Ok(false)
+}
+
+// Enhanced transaction status verification
+async fn verify_transaction_status(
+    client: &RpcClient,
+    signature: &str,
+) -> Result<TransactionStatus, TransactionError> {
+    let signature_sig = solana_sdk::signature::Signature::from_str(signature)
+        .map_err(|e| TransactionError::Transaction(format!("Invalid signature: {}", e)))?;
+    
+    match client.get_signature_status(&signature_sig) {
+        Ok(Some(_)) => {
+            info!("✅ Transaction confirmed on-chain");
+            Ok(TransactionStatus::Confirmed)
+        }
+        Ok(None) => {
+            info!("❌ Transaction not found on-chain");
+            Ok(TransactionStatus::NotFound)
+        }
+        Err(e) => {
+            info!("❌ Error checking transaction status: {}", e);
+            Ok(TransactionStatus::Unknown)
+        }
+    }
+}
+
+// Enhanced single swap execution with verification
+async fn execute_single_swap_with_verification(
+    client: &RpcClient,
+    wallet: &Keypair,
+    quote: &JupiterQuote,
+    args: &Args,
+    config: &Config,
+    initial_sol_balance: f64,
+    initial_usdc_balance: f64,
+) -> Result<(String, f64, f64), TransactionError> {
+    // Execute the swap (existing logic)
+    let signature = execute_swap(client, wallet, quote, args, config, initial_sol_balance, initial_usdc_balance).await?;
+    
+    // Enhanced verification
+    let balance_changed = wait_for_balance_change(
+        client, wallet, config, initial_sol_balance, initial_usdc_balance, 
+        &args.direction, 12
+    ).await?;
+    
+    if !balance_changed {
+        // Check transaction status on-chain
+        let status = verify_transaction_status(client, &signature).await?;
+        match status {
+            TransactionStatus::Failed => {
+                return Err(TransactionError::Transaction("Transaction failed on-chain".to_string()));
+            }
+            TransactionStatus::NotFound => {
+                return Err(TransactionError::Transaction("Transaction not found on-chain".to_string()));
+            }
+            _ => {
+                return Err(TransactionError::Transaction("Transaction status unclear".to_string()));
+            }
+        }
+    }
+    
+    // Get final balances to calculate changes
+    let final_sol_balance = get_sol_balance(client, &wallet.pubkey())?;
+    let final_usdc_balance = get_usdc_balance(client, &wallet.pubkey(), &config.usdc_mint)?;
+    
+    let sol_change = final_sol_balance - initial_sol_balance;
+    let usdc_change = final_usdc_balance - initial_usdc_balance;
+    
+    Ok((signature, sol_change, usdc_change))
+}
+
+// Enhanced swap execution with retry logic
+pub async fn execute_swap_with_retry(
+    client: &RpcClient,
+    wallet: &Keypair,
+    quote: &JupiterQuote,
+    args: &Args,
+    config: &Config,
+    initial_sol_balance: f64,
+    initial_usdc_balance: f64,
+    max_retries: u32,
+) -> Result<(String, f64, f64), TransactionError> {
+    let mut attempt = 0;
+    
+    while attempt < max_retries {
+        attempt += 1;
+        
+        info!("🔄 Executing swap attempt {}/{}", attempt, max_retries);
+        
+        match execute_single_swap_with_verification(
+            client, wallet, quote, args, config, 
+            initial_sol_balance, initial_usdc_balance
+        ).await {
+            Ok((signature, sol_change, usdc_change)) => {
+                info!("✅ Swap successful on attempt {}", attempt);
+                return Ok((signature, sol_change, usdc_change));
+            }
+            Err(e) => {
+                if attempt >= max_retries {
+                    error!("❌ All {} retry attempts failed: {}", max_retries, e);
+                    return Err(e);
+                }
+                
+                let delay = 2u64.pow(attempt);
+                warn!("⚠️  Swap failed (attempt {}/{}), retrying in {} seconds... Error: {}", 
+                      attempt, max_retries, delay, e);
+                tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
+            }
+        }
+    }
+    
+    Err(TransactionError::Transaction("Max retries exceeded".to_string()))
+}
 
 pub async fn get_jupiter_quote(args: &Args, config: &Config) -> Result<JupiterQuote, TransactionError> {
     let client = reqwest::Client::new();

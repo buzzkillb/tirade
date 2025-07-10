@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
     let database_url = env::var("PRICE_FEED_DATABASE_URL")
         .unwrap_or_else(|_| "http://localhost:8080".to_string());
     
-    let transaction_binary_path = "../target/debug/transaction";
+    let transaction_binary_path = "./target/debug/transaction";
     
     info!("📊 Database URL: {}", database_url);
     info!("🔧 Transaction binary: {}", transaction_binary_path);

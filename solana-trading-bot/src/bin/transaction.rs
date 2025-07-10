@@ -1,7 +1,7 @@
 use solana_trading_bot::transaction::{
     Args, Config, TransactionError,
     config::create_wallet_from_private_key,
-    jupiter::{execute_swap, get_jupiter_quote, get_sol_balance, get_usdc_balance},
+    jupiter::{execute_swap, execute_swap_with_retry, get_jupiter_quote, get_sol_balance, get_usdc_balance},
 };
 
 use clap::Parser;
@@ -68,20 +68,17 @@ async fn main() -> Result<(), TransactionError> {
         return Ok(());
     }
     
-    // Execute the swap
-    info!("Executing swap transaction...");
-    let tx_signature = execute_swap(&client, &wallet, &quote, &args, &config, sol_balance, usdc_balance).await?;
+    // Execute the swap with enhanced retry logic
+    info!("Executing swap transaction with retry logic...");
+    let (tx_signature, sol_change, usdc_change) = execute_swap_with_retry(
+        &client, &wallet, &quote, &args, &config, 
+        sol_balance, usdc_balance, 3 // 3 retries
+    ).await?;
     info!("Transaction successful! Signature: {}", tx_signature);
     
-    // Wait for transaction confirmation and check new balances
-    info!("Waiting for transaction confirmation...");
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-    
-    let new_sol_balance = get_sol_balance(&client, &wallet.pubkey())?;
-    let new_usdc_balance = get_usdc_balance(&client, &wallet.pubkey(), &config.usdc_mint)?;
-    
-    let sol_change = new_sol_balance - sol_balance;
-    let usdc_change = new_usdc_balance - usdc_balance;
+    // Calculate new balances
+    let new_sol_balance = sol_balance + sol_change;
+    let new_usdc_balance = usdc_balance + usdc_change;
     
     info!("=== TRANSACTION RESULTS ===");
     info!("Transaction Signature: {}", tx_signature);
