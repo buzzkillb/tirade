@@ -124,11 +124,24 @@ impl TradingEngine {
     }
 
     async fn trading_cycle(&mut self) -> Result<()> {
-        // Step 0: Retry position recovery if we don't have a position
-        if self.current_position.is_none() {
-            debug!("🔄 No current position detected, attempting recovery...");
-            if let Err(e) = self.recover_positions().await {
-                debug!("⚠️  Position recovery failed: {}", e);
+        // Step 0: ALWAYS attempt position recovery to ensure accurate state
+        debug!("🔄 Ensuring accurate position state...");
+        match self.recover_positions().await {
+            Ok(_) => {
+                if self.current_position.is_some() {
+                    info!("📈 Position state confirmed: Active position exists");
+                } else {
+                    info!("💤 Position state confirmed: No active position");
+                }
+            }
+            Err(e) => {
+                warn!("⚠️ Position recovery failed: {}", e);
+                // If position recovery fails, we should be conservative and assume we might have a position
+                // This prevents executing trades when we're unsure of our state
+                if self.current_position.is_none() {
+                    warn!("🚫 Position state unclear - skipping signal analysis to prevent duplicate trades");
+                    return Ok(());
+                }
             }
         }
         
@@ -191,12 +204,16 @@ impl TradingEngine {
         // Step 4: Analyze and generate signal
         let signal = self.strategy.analyze(&prices, &consolidated_indicators);
 
-        // Step 4.5: Check signal cooldown and position state to prevent multiple trades
+        // Step 4.5: STRICT position and signal validation
         let now = Utc::now();
         let signal_cooldown_secs = 300; // 5 minutes cooldown between signals
         
+        // CRITICAL: Double-check position state before any signal execution
+        let has_position = self.current_position.is_some();
+        info!("🔍 Signal validation - Position state: {}", if has_position { "ACTIVE" } else { "NONE" });
+        
         // STRICT RULE: No BUY signals if we already have a position
-        if signal.signal_type == SignalType::Buy && self.current_position.is_some() {
+        if signal.signal_type == SignalType::Buy && has_position {
             info!("🚫 BLOCKED: BUY signal ignored - already have a position");
             info!("📊 Current position: {:?} at ${:.4}", 
                   self.current_position.as_ref().unwrap().position_type,
@@ -524,6 +541,16 @@ impl TradingEngine {
     }
 
     async fn open_position(&mut self, price: f64, position_type: PositionType) -> Result<()> {
+        // Safety check: Ensure we don't already have a position
+        if self.current_position.is_some() {
+            warn!("🚫 SAFETY CHECK FAILED: Attempted to open position when one already exists!");
+            warn!("📊 Existing position: {:?} at ${:.4}", 
+                  self.current_position.as_ref().unwrap().position_type,
+                  self.current_position.as_ref().unwrap().entry_price);
+            warn!("🎯 Attempted to open: {:?} at ${:.4}", position_type, price);
+            return Err(anyhow!("Cannot open position - one already exists"));
+        }
+        
         let log_type = position_type.clone();
         self.current_position = Some(Position {
             entry_price: price,
@@ -532,6 +559,7 @@ impl TradingEngine {
         });
         
         info!("📈 Opened {:?} position at ${:.4}", log_type, price);
+        info!("🔒 Position safety check passed - no duplicate positions");
         Ok(())
     }
 
@@ -1238,20 +1266,42 @@ impl TradingEngine {
     async fn recover_positions(&mut self) -> Result<()> {
         info!("🔄 Recovering positions from database...");
         
-        if let Some(position) = self.fetch_open_positions().await? {
-            self.current_position = Some(position.clone());
-            info!("📈 Recovered {} position: Entry ${:.4} at {}", 
-                  match position.position_type {
-                      PositionType::Long => "Long",
-                      PositionType::Short => "Short",
-                  },
-                  position.entry_price,
-                  position.entry_time.format("%Y-%m-%d %H:%M:%S UTC"));
-        } else {
-            info!("💤 No open positions found in database");
+        match self.fetch_open_positions().await {
+            Ok(Some(position)) => {
+                self.current_position = Some(position.clone());
+                info!("📈 Recovered {} position: Entry ${:.4} at {}", 
+                      match position.position_type {
+                          PositionType::Long => "Long",
+                          PositionType::Short => "Short",
+                      },
+                      position.entry_price,
+                      position.entry_time.format("%Y-%m-%d %H:%M:%S UTC"));
+                
+                // Validate the recovered position
+                let now = Utc::now();
+                let position_age = now - position.entry_time;
+                if position_age.num_hours() > 24 {
+                    warn!("⚠️ Recovered position is {} hours old - may be stale", position_age.num_hours());
+                }
+                
+                Ok(())
+            }
+            Ok(None) => {
+                // Clear any existing position state to ensure consistency
+                if self.current_position.is_some() {
+                    info!("🔄 Clearing stale position state - no position found in database");
+                    self.current_position = None;
+                } else {
+                    info!("💤 No open positions found in database");
+                }
+                Ok(())
+            }
+            Err(e) => {
+                warn!("❌ Failed to recover positions: {}", e);
+                // Don't clear existing position state on error - be conservative
+                Err(e)
+            }
         }
-        
-        Ok(())
     }
 
     // Helper functions for enhanced analysis
