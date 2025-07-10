@@ -408,14 +408,14 @@ async fn index() -> Result<HttpResponse> {
                 <div id="total-pnl" class="price-display">Loading...</div>
                 <div id="pnl-details">Loading details...</div>
             </div>
-        </div>
-        
-        <div class="grid">
+            
             <div class="card positions-card">
                 <h2>📈 Active Positions</h2>
                 <div id="active-positions">Loading...</div>
             </div>
-            
+        </div>
+        
+        <div class="grid">
             <div class="card trades-card">
                 <h2>💼 Recent Trades</h2>
                 <div id="recent-trades">Loading...</div>
