@@ -519,10 +519,10 @@ async fn index() -> Result<HttpResponse> {
             `).join('');
         }
         
-        // Start price updates every 10 seconds
+        // Start price updates every 1 second
         function startPriceUpdates() {
             loadDashboard(); // Initial load
-            priceUpdateInterval = setInterval(loadDashboard, 10000); // Update every 10 seconds
+            priceUpdateInterval = setInterval(loadDashboard, 1000); // Update every 1 second
         }
         
         // Initialize dashboard
