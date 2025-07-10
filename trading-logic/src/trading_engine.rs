@@ -476,21 +476,33 @@ impl TradingEngine {
                         let entry_time = position.entry_time;
                         let position_type = position.position_type.clone();
                         let duration = Utc::now() - entry_time;
-                        self.close_position(signal.price).await?;
+                        let position_quantity = position.quantity;
                         
-
-                        
-                        info!("");
-                        info!("🛑 DYNAMIC STOP LOSS TRIGGERED");
-                        info!("═══════════════════════════════════════════════════════════════");
-                        info!("  💰 Exit Price: ${:.4}", signal.price);
-                        info!("  📈 Entry Price: ${:.4}", entry_price);
-                        info!("  💸 Loss: {:.2}%", pnl * 100.0);
-                        info!("  🎯 Dynamic Stop Loss Threshold: {:.2}%", signal.stop_loss * 100.0);
-                        info!("  ⏱️  Duration: {}s", duration.num_seconds());
-                        info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
-                        info!("═══════════════════════════════════════════════════════════════");
-                        info!("");
+                        // Execute the sell transaction first
+                        match self.trading_executor.execute_signal(signal, Some(position_quantity)).await {
+                            Ok((true, _)) => {
+                                // Trade executed successfully, now close position in database
+                                self.close_position(signal.price).await?;
+                                
+                                info!("");
+                                info!("🛑 DYNAMIC STOP LOSS TRIGGERED");
+                                info!("═══════════════════════════════════════════════════════════════");
+                                info!("  💰 Exit Price: ${:.4}", signal.price);
+                                info!("  📈 Entry Price: ${:.4}", entry_price);
+                                info!("  💸 Loss: {:.2}%", pnl * 100.0);
+                                info!("  🎯 Dynamic Stop Loss Threshold: {:.2}%", signal.stop_loss * 100.0);
+                                info!("  ⏱️  Duration: {}s", duration.num_seconds());
+                                info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
+                                info!("═══════════════════════════════════════════════════════════════");
+                                info!("");
+                            }
+                            Ok((false, _)) => {
+                                warn!("⚠️  STOP LOSS signal execution failed or was skipped");
+                            }
+                            Err(e) => {
+                                error!("❌ STOP LOSS signal execution error: {}", e);
+                            }
+                        }
                     }
                     // Take profit check using dynamic threshold
                     else if pnl > signal.take_profit {
@@ -498,21 +510,33 @@ impl TradingEngine {
                         let entry_time = position.entry_time;
                         let position_type = position.position_type.clone();
                         let duration = Utc::now() - entry_time;
-                        self.close_position(signal.price).await?;
+                        let position_quantity = position.quantity;
                         
-
-                        
-                        info!("");
-                        info!("💰 DYNAMIC TAKE PROFIT TRIGGERED");
-                        info!("═══════════════════════════════════════════════════════════════");
-                        info!("  💰 Exit Price: ${:.4}", signal.price);
-                        info!("  📈 Entry Price: ${:.4}", entry_price);
-                        info!("  💰 Profit: {:.2}%", pnl * 100.0);
-                        info!("  🎯 Dynamic Take Profit Threshold: {:.2}%", signal.take_profit * 100.0);
-                        info!("  ⏱️  Duration: {}s", duration.num_seconds());
-                        info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
-                        info!("═══════════════════════════════════════════════════════════════");
-                        info!("");
+                        // Execute the sell transaction first
+                        match self.trading_executor.execute_signal(signal, Some(position_quantity)).await {
+                            Ok((true, _)) => {
+                                // Trade executed successfully, now close position in database
+                                self.close_position(signal.price).await?;
+                                
+                                info!("");
+                                info!("💰 DYNAMIC TAKE PROFIT TRIGGERED");
+                                info!("═══════════════════════════════════════════════════════════════");
+                                info!("  💰 Exit Price: ${:.4}", signal.price);
+                                info!("  📈 Entry Price: ${:.4}", entry_price);
+                                info!("  💰 Profit: {:.2}%", pnl * 100.0);
+                                info!("  🎯 Dynamic Take Profit Threshold: {:.2}%", signal.take_profit * 100.0);
+                                info!("  ⏱️  Duration: {}s", duration.num_seconds());
+                                info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
+                                info!("═══════════════════════════════════════════════════════════════");
+                                info!("");
+                            }
+                            Ok((false, _)) => {
+                                warn!("⚠️  TAKE PROFIT signal execution failed or was skipped");
+                            }
+                            Err(e) => {
+                                error!("❌ TAKE PROFIT signal execution error: {}", e);
+                            }
+                        }
                     }
                 }
             }
