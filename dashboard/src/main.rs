@@ -2325,34 +2325,7 @@ async fn index() -> Result<HttpResponse> {
                             </div>
                         </div>
                         
-                        <div class="signal-reasoning">
-                            <div class="reasoning-label">📊 Detailed Analysis:</div>
-                            <div class="reasoning-text">
-                                ${Array.isArray(signal.reasoning) ? 
-                                    signal.reasoning.map(reason => 
-                                        `<div class="reasoning-item">• ${reason}</div>`
-                                    ).join('') : 
-                                    `<div class="reasoning-item">• ${signal.reasoning}</div>`
-                                }
-                            </div>
-                        </div>
-                        <div class="signal-details">
-                            <div class="details-label">Signal Details:</div>
-                            <div class="details-grid">
-                                <div class="detail-item">
-                                    <span class="detail-label">Take Profit:</span>
-                                    <span class="detail-value">${signal.take_profit ? (signal.take_profit * 100).toFixed(2) + '%' : 'N/A'}</span>
-                                </div>
-                                <div class="detail-item">
-                                    <span class="detail-label">Stop Loss:</span>
-                                    <span class="detail-value">${signal.stop_loss ? (signal.stop_loss * 100).toFixed(2) + '%' : 'N/A'}</span>
-                                </div>
-                                <div class="detail-item">
-                                    <span class="detail-label">Executed:</span>
-                                    <span class="detail-value ${signal.executed ? 'positive' : 'neutral'}">${signal.executed ? '✅ Yes' : '⏳ Pending'}</span>
-                                </div>
-                            </div>
-                        </div>
+
                         <div><small>${new Date(signal.timestamp).toLocaleString()}</small></div>
                     </div>
                 `;
