@@ -1089,39 +1089,69 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
 
-        let positions: Vec<crate::models::Position> = rows
-            .into_iter()
-            .map(|row| {
-                let entry_price: f64 = row.try_get("entry_price").unwrap_or_default();
-                let exit_price: Option<f64> = row.try_get("exit_price").ok();
-                let pnl: Option<f64> = row.try_get("pnl").ok();
-                let pnl_percent: Option<f64> = row.try_get("pnl_percent").ok();
-                
-                // Calculate current price and PnL for dashboard compatibility
-                let current_price = exit_price.unwrap_or(entry_price); // Use exit price if available, otherwise entry price
-                let pnl_value = pnl.unwrap_or(0.0);
-                let pnl_percent_value = pnl_percent.unwrap_or(0.0);
-                
-                crate::models::Position {
-                    id: row.try_get("id").unwrap_or_default(),
-                    wallet_id: row.try_get("wallet_id").unwrap_or_default(),
-                    pair: row.try_get("pair").unwrap_or_default(),
-                    position_type: row.try_get("position_type").unwrap_or_default(),
-                    entry_price,
-                    entry_time: row.try_get("entry_time").unwrap_or_default(),
-                    quantity: row.try_get("quantity").unwrap_or_default(),
-                    status: row.try_get("status").unwrap_or_default(),
-                    exit_price,
-                    exit_time: row.try_get("exit_time").ok(),
-                    pnl: Some(pnl_value), // Always provide a value for dashboard
-                    pnl_percent: Some(pnl_percent_value), // Always provide a value for dashboard
-                    duration_seconds: row.try_get("duration_seconds").ok(),
-                    created_at: row.try_get("created_at").unwrap_or_default(),
-                    updated_at: row.try_get("updated_at").unwrap_or_default(),
-                    current_price: Some(current_price), // Add current_price for dashboard compatibility
+        let mut positions = Vec::new();
+        
+        for row in rows {
+            let entry_price: f64 = row.try_get("entry_price").unwrap_or_default();
+            let quantity: f64 = row.try_get("quantity").unwrap_or_default();
+            let position_type: String = row.try_get("position_type").unwrap_or_default();
+            let pair: String = row.try_get("pair").unwrap_or_default();
+            let status: String = row.try_get("status").unwrap_or_default();
+            let exit_price: Option<f64> = row.try_get("exit_price").ok();
+            let pnl: Option<f64> = row.try_get("pnl").ok();
+            let pnl_percent: Option<f64> = row.try_get("pnl_percent").ok();
+            
+            // For open positions, get the current market price to calculate unrealized PnL
+            let current_price = if status == "open" {
+                // Try to get the latest price from price feeds
+                match self.get_latest_price(&pair, None).await {
+                    Ok(Some(price_feed)) => price_feed.price,
+                    _ => entry_price // Fallback to entry price if no current price available
                 }
-            })
-            .collect();
+            } else {
+                exit_price.unwrap_or(entry_price)
+            };
+            
+            // Calculate unrealized PnL for open positions
+            let (pnl_value, pnl_percent_value) = if status == "open" {
+                // For open positions, calculate unrealized PnL
+                let unrealized_pnl = if position_type == "long" {
+                    (current_price - entry_price) * quantity
+                } else {
+                    (entry_price - current_price) * quantity
+                };
+                
+                let unrealized_pnl_percent = if entry_price > 0.0 {
+                    (unrealized_pnl / (entry_price * quantity)) * 100.0
+                } else {
+                    0.0
+                };
+                
+                (unrealized_pnl, unrealized_pnl_percent)
+            } else {
+                // For closed positions, use stored values
+                (pnl.unwrap_or(0.0), pnl_percent.unwrap_or(0.0))
+            };
+            
+            positions.push(crate::models::Position {
+                id: row.try_get("id").unwrap_or_default(),
+                wallet_id: row.try_get("wallet_id").unwrap_or_default(),
+                pair,
+                position_type,
+                entry_price,
+                entry_time: row.try_get("entry_time").unwrap_or_default(),
+                quantity,
+                status,
+                exit_price,
+                exit_time: row.try_get("exit_time").ok(),
+                pnl: Some(pnl_value), // Always provide a value for dashboard
+                pnl_percent: Some(pnl_percent_value), // Always provide a value for dashboard
+                duration_seconds: row.try_get("duration_seconds").ok(),
+                created_at: row.try_get("created_at").unwrap_or_default(),
+                updated_at: row.try_get("updated_at").unwrap_or_default(),
+                current_price: Some(current_price), // Add current_price for dashboard compatibility
+            });
+        }
 
         Ok(positions)
     }
