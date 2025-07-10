@@ -290,14 +290,14 @@ impl TradingEngine {
                         info!("📊 Using {} 1-minute candles for analysis", candles.len());
                         
                         // Log candle details for debugging
-                        if let Some(latest_candle) = candles.last() {
+                        if let Some(latest_candle) = candles.first() {
                             info!("🕯️  Latest candle: O={:.4}, H={:.4}, L={:.4}, C={:.4}, Time={}", 
                                   latest_candle.open, latest_candle.high, latest_candle.low, 
                                   latest_candle.close, latest_candle.timestamp.format("%H:%M:%S"));
                         }
                         
                         if candles.len() >= 2 {
-                            let prev_candle = &candles[candles.len() - 2];
+                            let prev_candle = &candles[1];
                             info!("🕯️  Previous candle: O={:.4}, H={:.4}, L={:.4}, C={:.4}, Time={}", 
                                   prev_candle.open, prev_candle.high, prev_candle.low, 
                                   prev_candle.close, prev_candle.timestamp.format("%H:%M:%S"));
