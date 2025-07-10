@@ -288,6 +288,21 @@ impl TradingEngine {
                 crate::models::ApiResponse { success: true, data: Some(candles), .. } => {
                     if !candles.is_empty() {
                         info!("📊 Using {} 1-minute candles for analysis", candles.len());
+                        
+                        // Log candle details for debugging
+                        if let Some(latest_candle) = candles.last() {
+                            info!("🕯️  Latest candle: O={:.4}, H={:.4}, L={:.4}, C={:.4}, Time={}", 
+                                  latest_candle.open, latest_candle.high, latest_candle.low, 
+                                  latest_candle.close, latest_candle.timestamp.format("%H:%M:%S"));
+                        }
+                        
+                        if candles.len() >= 2 {
+                            let prev_candle = &candles[candles.len() - 2];
+                            info!("🕯️  Previous candle: O={:.4}, H={:.4}, L={:.4}, C={:.4}, Time={}", 
+                                  prev_candle.open, prev_candle.high, prev_candle.low, 
+                                  prev_candle.close, prev_candle.timestamp.format("%H:%M:%S"));
+                        }
+                        
                         let prices: Vec<PriceFeed> = candles.into_iter().map(|candle| PriceFeed {
                             id: candle.id,
                             source: "candle".to_string(),
@@ -585,6 +600,23 @@ impl TradingEngine {
         
         info!("  📊 Data Points: {} | Signal: {:?}", price_count, signal.signal_type);
         info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
+        
+        // Log data source information
+        if !prices.is_empty() {
+            let data_source = prices.first().unwrap().source.as_str();
+            if data_source == "candle" {
+                info!("  🕯️  Data Source: 1-minute candles (OHLC)");
+                if prices.len() >= 2 {
+                    let latest = prices.last().unwrap();
+                    let previous = &prices[prices.len() - 2];
+                    let candle_range = ((latest.price - previous.price) / previous.price) * 100.0;
+                    info!("  📈 Candle Range: {:.3}% (${:.4} → ${:.4})", 
+                          candle_range, previous.price, latest.price);
+                }
+            } else {
+                info!("  📊 Data Source: Raw price data");
+            }
+        }
         
         // Position status with enhanced information
         if let Some(position) = &self.current_position {
