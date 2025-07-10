@@ -2120,10 +2120,38 @@ async fn index() -> Result<HttpResponse> {
             }
 
             container.innerHTML = trades.slice(0, 5).map(trade => {
+                // Format the trade details based on trade type
+                let tradeDetails = '';
+                let tradeIcon = '';
+                
+                if (trade.trade_type.toLowerCase() === 'buy') {
+                    tradeIcon = '🟢';
+                    // For buy trades: show SOL received for USDC spent
+                    const solQuantity = trade.quantity.toFixed(6);
+                    const usdcSpent = trade.total_value.toFixed(2);
+                    tradeDetails = `${solQuantity} SOL for $${usdcSpent} USDC`;
+                } else if (trade.trade_type.toLowerCase() === 'sell') {
+                    tradeIcon = '🔴';
+                    // For sell trades: show SOL sold for USDC received
+                    const solQuantity = trade.quantity.toFixed(6);
+                    const usdcReceived = trade.total_value.toFixed(2);
+                    tradeDetails = `${solQuantity} SOL for $${usdcReceived} USDC`;
+                } else {
+                    tradeIcon = '🟡';
+                    tradeDetails = `$${trade.total_value.toFixed(2)}`;
+                }
+                
+                // Format timestamp
+                const timestamp = new Date(trade.timestamp).toLocaleString();
+                
                 return `
-                    <div class="metric">
-                        <span>${trade.trade_type} ${trade.pair}</span>
-                        <span class="metric-value">$${trade.total_value.toFixed(2)}</span>
+                    <div class="metric" style="padding: 8px; margin-bottom: 8px; background: rgba(255, 255, 255, 0.05); border-radius: 6px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <span style="font-weight: bold; color: #14f195;">${tradeIcon} ${trade.trade_type.toUpperCase()}</span>
+                            <span style="font-size: 0.8rem; color: #888;">${timestamp}</span>
+                        </div>
+                        <div style="color: #e0e0e0; font-size: 0.9rem;">${trade.pair}</div>
+                        <div style="color: #14f195; font-weight: bold; font-size: 1rem;">${tradeDetails}</div>
                     </div>
                 `;
             }).join('');
