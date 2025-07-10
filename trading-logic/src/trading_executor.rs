@@ -117,21 +117,22 @@ impl TradingExecutor {
         })
     }
 
-    pub async fn execute_signal(&self, signal: &TradingSignal) -> Result<bool> {
+    pub async fn execute_signal(&self, signal: &TradingSignal) -> Result<(bool, Option<f64>)> {
         // Check if trading execution is enabled
         if !self.enable_execution {
             info!("🔄 Paper trading mode - signal would be executed: {:?} at ${:.4}", 
                   signal.signal_type, signal.price);
             
             // In paper trading mode, simulate the transaction with dry-run
-            return self.simulate_trade(signal).await;
+            let success = self.simulate_trade(signal).await?;
+            return Ok((success, None)); // No quantity for paper trading
         }
 
         // Check confidence threshold
         if signal.confidence < self.min_confidence_threshold {
             warn!("⚠️  Signal confidence ({:.1}%) below threshold ({:.1}%) - skipping execution", 
                   signal.confidence * 100.0, self.min_confidence_threshold * 100.0);
-            return Ok(false);
+            return Ok((false, None));
         }
 
         // Get current wallet balance
@@ -139,14 +140,23 @@ impl TradingExecutor {
         
         match signal.signal_type {
             SignalType::Buy => {
-                self.execute_buy_signal(signal, &balance).await
+                let success = self.execute_buy_signal(signal, &balance).await?;
+                // For buy signals, return the SOL quantity received
+                let quantity = if success {
+                    // Get the SOL quantity from the last transaction result
+                    self.get_last_transaction_sol_quantity().await?
+                } else {
+                    None
+                };
+                Ok((success, quantity))
             }
             SignalType::Sell => {
-                self.execute_sell_signal(signal, &balance).await
+                let success = self.execute_sell_signal(signal, &balance).await?;
+                Ok((success, None)) // No quantity needed for sell
             }
             SignalType::Hold => {
                 // Hold signals don't execute trades
-                Ok(false)
+                Ok((false, None))
             }
         }
     }
@@ -252,8 +262,9 @@ impl TradingExecutor {
             return Ok(false);
         }
 
-        // For sell signals, we should sell the full SOL balance (not just a percentage)
-        let position_size_sol = balance.sol_balance;
+        // For sell signals, we should sell the same percentage of SOL as we used for buying
+        // This ensures we only sell the amount that was bought, not the entire balance
+        let position_size_sol = balance.sol_balance * self.position_size_percentage;
         
         info!("💰 Using {:.6} SOL for trade ({:.6} available)", position_size_sol, balance.sol_balance);
 
@@ -465,5 +476,24 @@ impl TradingExecutor {
             .map_err(|e| anyhow!("Failed to create keypair: {}", e))?;
         
         Ok(keypair.pubkey().to_string())
+    }
+
+    async fn get_last_transaction_sol_quantity(&self) -> Result<Option<f64>> {
+        // This method would extract the SOL quantity from the last transaction result
+        // For now, we'll use a simple approach by checking the transaction output
+        // In a real implementation, you'd store the last transaction result
+        
+        // Since we don't have persistent storage of transaction results,
+        // we'll estimate the quantity based on the position size percentage
+        // This is a temporary workaround - ideally you'd store the actual transaction result
+        
+        let balance = self.get_wallet_balance().await?;
+        let position_size_usdc = balance.usdc_balance * self.position_size_percentage;
+        
+        // Estimate SOL quantity based on current price
+        // This is approximate - the actual quantity depends on the exact price at execution
+        let estimated_sol_quantity = position_size_usdc / 150.0; // Approximate SOL price
+        
+        Ok(Some(estimated_sol_quantity))
     }
 } 

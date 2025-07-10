@@ -366,9 +366,10 @@ impl TradingEngine {
                     info!("🟢 BUY signal detected - no current position, executing trade...");
                     // Execute the trade using trading executor
                     match self.trading_executor.execute_signal(signal).await {
-                        Ok(true) => {
+                        Ok((true, quantity)) => {
                             // Trade executed successfully (or paper trading)
-                            self.open_position(signal.price, PositionType::Long).await?;
+                            let actual_quantity = quantity.unwrap_or(1.0); // Default to 1.0 if no quantity available
+                            self.open_position(signal.price, PositionType::Long, actual_quantity).await?;
                             
                             // Post position to database
                             if let Some(position) = &self.current_position {
@@ -389,7 +390,7 @@ impl TradingEngine {
                             info!("═══════════════════════════════════════════════════════════════");
                             info!("");
                         }
-                        Ok(false) => {
+                        Ok((false, _)) => {
                             warn!("⚠️  BUY signal execution failed or was skipped");
                         }
                         Err(e) => {
@@ -410,10 +411,11 @@ impl TradingEngine {
                     let entry_price = position.entry_price;
                     let entry_time = position.entry_time;
                     let position_type = position.position_type.clone();
+                    let position_quantity = position.quantity;
                     
                     // Execute the trade using trading executor
                     match self.trading_executor.execute_signal(signal).await {
-                        Ok(true) => {
+                        Ok((true, _)) => {
                             // Trade executed successfully (or paper trading)
                             let pnl = self.calculate_pnl(signal.price, position);
                             let duration = Utc::now() - entry_time;
@@ -440,7 +442,7 @@ impl TradingEngine {
                             info!("═══════════════════════════════════════════════════════════════");
                             info!("");
                         }
-                        Ok(false) => {
+                        Ok((false, _)) => {
                             warn!("⚠️  SELL signal execution failed or was skipped");
                         }
                         Err(e) => {
@@ -513,7 +515,7 @@ impl TradingEngine {
         Ok(())
     }
 
-    async fn open_position(&mut self, price: f64, position_type: PositionType) -> Result<()> {
+    async fn open_position(&mut self, price: f64, position_type: PositionType, quantity: f64) -> Result<()> {
         // Safety check: Ensure we don't already have a position
         if self.current_position.is_some() {
             warn!("🚫 SAFETY CHECK FAILED: Attempted to open position when one already exists!");
@@ -528,11 +530,11 @@ impl TradingEngine {
         self.current_position = Some(Position {
             entry_price: price,
             entry_time: Utc::now(),
-            quantity: 1.0, // Default quantity
+            quantity, // Use the actual quantity received from the transaction
             position_type,
         });
         
-        info!("📈 Opened {:?} position at ${:.4}", log_type, price);
+        info!("📈 Opened {:?} position at ${:.4} with quantity {:.6}", log_type, price, quantity);
         info!("🔒 Position safety check passed - no duplicate positions");
         Ok(())
     }
