@@ -171,21 +171,30 @@ impl PriceFeedService {
     async fn candle_aggregation_loop() {
         let mut ticker = time::interval(Duration::from_secs(30)); // Check every 30 seconds
         
+        info!("🕯️  Starting candle aggregation loop (every 30 seconds)");
+        
         loop {
             ticker.tick().await;
             
+            info!("🕯️  Running candle aggregation cycle...");
+            
             // Aggregate candles for different intervals
-            if let Err(e) = Self::aggregate_candles("SOL/USDC", "30s").await {
-                error!("Failed to aggregate 30s candles: {}", e);
+            match Self::aggregate_candles("SOL/USDC", "30s").await {
+                Ok(_) => info!("✅ 30s candle aggregation completed"),
+                Err(e) => error!("❌ Failed to aggregate 30s candles: {}", e),
             }
             
-            if let Err(e) = Self::aggregate_candles("SOL/USDC", "1m").await {
-                error!("Failed to aggregate 1m candles: {}", e);
+            match Self::aggregate_candles("SOL/USDC", "1m").await {
+                Ok(_) => info!("✅ 1m candle aggregation completed"),
+                Err(e) => error!("❌ Failed to aggregate 1m candles: {}", e),
             }
             
-            if let Err(e) = Self::aggregate_candles("SOL/USDC", "5m").await {
-                error!("Failed to aggregate 5m candles: {}", e);
+            match Self::aggregate_candles("SOL/USDC", "5m").await {
+                Ok(_) => info!("✅ 5m candle aggregation completed"),
+                Err(e) => error!("❌ Failed to aggregate 5m candles: {}", e),
             }
+            
+            info!("🕯️  Candle aggregation cycle completed");
         }
     }
 
@@ -204,10 +213,22 @@ impl PriceFeedService {
         
         let cutoff_time = now - chrono::Duration::seconds(interval_seconds as i64);
         
+        info!("🕯️  Aggregating {} candles for {} (cutoff: {}, now: {})", interval, pair, cutoff_time, now);
+        
         // Get prices from the last interval period
-        let prices = db_client.get_prices_since(pair, cutoff_time).await?;
+        let prices = match db_client.get_prices_since(pair, cutoff_time).await {
+            Ok(prices) => {
+                info!("📊 Found {} prices for {} candle aggregation", prices.len(), interval);
+                prices
+            }
+            Err(e) => {
+                error!("❌ Failed to get prices for {} candle: {}", interval, e);
+                return Err(e);
+            }
+        };
         
         if prices.len() < 2 {
+            info!("⚠️  Not enough prices for {} candle (need 2+, got {})", interval, prices.len());
             return Ok(()); // Not enough data for meaningful candle
         }
         
@@ -218,11 +239,20 @@ impl PriceFeedService {
         let low = prices.iter().map(|p| p.price).fold(f64::INFINITY, f64::min);
         let volume = 0.0; // No volume data from price feeds
         
-        // Store the candle
-        db_client.store_candle_with_retry(pair, interval, open, high, low, close, volume, 3).await?;
+        info!("🕯️  Creating {} candle: O={:.4}, H={:.4}, L={:.4}, C={:.4}", 
+              interval, open, high, low, close);
         
-        info!("Created {} candle for {}: O={:.4}, H={:.4}, L={:.4}, C={:.4}", 
-              interval, pair, open, high, low, close);
+        // Store the candle
+        match db_client.store_candle_with_retry(pair, interval, open, high, low, close, volume, 3).await {
+            Ok(_) => {
+                info!("✅ Successfully created {} candle for {}: O={:.4}, H={:.4}, L={:.4}, C={:.4}", 
+                      interval, pair, open, high, low, close);
+            }
+            Err(e) => {
+                error!("❌ Failed to store {} candle: {}", interval, e);
+                return Err(e);
+            }
+        }
         
         Ok(())
     }
