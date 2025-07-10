@@ -53,11 +53,75 @@ TiRADE is a comprehensive trading bot suite that combines real-time market analy
 └─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
+## 📊 Candle Aggregation System (NEW)
+
+### Data Flow Architecture
+
+```
+1-Second Price Feeds
+       ↓
+   Raw Data Storage
+       ↓
+  Candle Aggregation
+       ↓
+   OHLC Candles (30s, 1m, 5m)
+       ↓
+  Technical Analysis
+       ↓
+   Trading Signals
+```
+
+### Candle Intervals
+
+| Interval | Use Case | Data Points | Analysis Type |
+|----------|----------|-------------|---------------|
+| 30s | High-frequency momentum | 30 seconds | Quick momentum shifts |
+| 1m | Primary trading analysis | 60 seconds | **Recommended for signals** |
+| 5m | Trend confirmation | 300 seconds | Longer-term trends |
+
+### Benefits of Candle-Based Analysis
+
+1. **Noise Reduction**: Eliminates 1-second price spikes and micro-movements
+2. **Industry Standard**: OHLC candles are the standard for technical analysis
+3. **Better Indicators**: RSI, SMA, and volatility calculations work optimally
+4. **Reliable Signals**: More consistent trading signals with fewer false positives
+5. **Scalable**: Can easily add more intervals (15m, 1h, 4h) for different strategies
+
+### API Endpoints
+
+```bash
+# Get candles for analysis
+GET /candles/SOL%2FUSDC/1m?limit=200
+
+# Get latest candle
+GET /candles/SOL%2FUSDC/1m/latest
+
+# Store candle (internal)
+POST /candles
+```
+
 ## 🧠 Trading Engine Logic
 
 ### Core Strategy Components
 
-#### 1. **Multi-timeframe Analysis**
+#### 1. **Candle-Based Analysis (NEW)**
+```rust
+// Data Aggregation System
+1-second price feeds → 30s/1m/5m OHLC candles → Technical Analysis
+```
+
+**Candle Intervals:**
+- **30-second candles**: High-frequency momentum analysis
+- **1-minute candles**: Primary trading analysis (recommended)
+- **5-minute candles**: Trend confirmation and longer-term signals
+
+**Benefits:**
+- **Reduced Noise**: Aggregated data eliminates 1-second price spikes
+- **Industry Standard**: OHLC candles are the standard for technical analysis
+- **Better Indicators**: RSI, SMA, and volatility calculations work optimally
+- **Robust Analysis**: More reliable signals with fewer false positives
+
+#### 2. **Multi-timeframe Analysis**
 ```rust
 // Timeframe Configuration
 short_timeframe: 30 minutes    // Recent momentum
@@ -65,7 +129,7 @@ medium_timeframe: 2 hours      // Intermediate trends
 long_timeframe: 6 hours        // Overall direction
 ```
 
-#### 2. **Technical Indicators**
+#### 3. **Technical Indicators**
 
 **RSI (Relative Strength Index)**
 - **Fast RSI (7 periods)**: Short-term momentum
@@ -74,17 +138,17 @@ long_timeframe: 6 hours        // Overall direction
 
 **Moving Averages**
 - **SMA20**: Short-term trend confirmation
-- **SMA50**: Medium-term trend direction
+- **SMA50**: Medium-term trend direction (enhanced)
 - **Crossover Analysis**: Price vs SMA relationships
 
 **Volatility Analysis**
 - **20-period volatility**: Market regime detection
 - **Dynamic thresholds**: Adaptive to market conditions
 
-#### 3. **Signal Generation Logic**
+#### 4. **Signal Generation Logic**
 
 ```rust
-// Confidence Calculation
+// Enhanced Confidence Calculation
 confidence = (
     rsi_divergence_score * 0.25 +
     ma_crossover_score * 0.25 +
@@ -93,7 +157,7 @@ confidence = (
     trend_confirmation * 0.10
 );
 
-// Signal Types
+// Signal Types with Position Enforcement
 if confidence > 0.45 && no_current_position {
     SignalType::Buy
 } else if current_position_exists && exit_conditions_met {
@@ -103,7 +167,7 @@ if confidence > 0.45 && no_current_position {
 }
 ```
 
-#### 4. **Risk Management**
+#### 5. **Risk Management**
 
 **Dynamic Position Sizing**
 ```rust
@@ -118,11 +182,11 @@ stop_loss = entry_price * (1 - volatility_multiplier)
 take_profit = entry_price * (1 + volatility_multiplier * 1.67)
 ```
 
-#### 5. **Position Management**
+#### 6. **Position Management**
 
 **Single Position Strategy**
 - Only one position at a time
-- Strict position enforcement
+- Strict position enforcement with double safety checks
 - 5-minute signal cooldown between trades
 - Automatic position recovery on restart
 
@@ -139,12 +203,26 @@ take_profit = entry_price * (1 + volatility_multiplier * 1.67)
 3. **Volatility Breakout**: Significant price movement
 4. **Momentum Confirmation**: Trend strength validation
 5. **No Current Position**: Single position enforcement
+6. **Candle Confirmation**: 1-minute candle analysis
 
 #### **Sell Signal Conditions**
 1. **Take Profit Hit**: Dynamic profit target reached
 2. **Stop Loss Hit**: Dynamic loss limit reached
 3. **Trend Reversal**: Technical indicators show reversal
 4. **Time-based Exit**: Maximum position duration
+
+### Enhanced Error Handling (NEW)
+
+**Robust HTTP Client:**
+- Raw response logging for debugging
+- Proper URL encoding for trading pairs
+- Graceful handling of empty responses
+- Manual JSON parsing to prevent EOF errors
+
+**Database Communication:**
+- Automatic retry logic for failed requests
+- Detailed error logging for troubleshooting
+- Fallback mechanisms for service outages
 
 ## 🚀 Quick Start
 
@@ -343,6 +421,11 @@ POSITION_SIZE_PERCENTAGE=0.5    # % of wallet per trade
 MAX_POSITION_SIZE=100.0         # Maximum position size
 TAKE_PROFIT_PERCENT=2.0         # Dynamic take profit
 STOP_LOSS_PERCENT=1.4           # Dynamic stop loss
+
+# Candle Aggregation (NEW)
+PYTH_INTERVAL_SECS=1            # 1-second price collection
+JUP_INTERVAL_SECS=10            # 10-second Jupiter updates
+CANDLE_AGGREGATION_ENABLED=true # Enable OHLC candle creation
 ```
 
 ### Technical Indicators
@@ -356,10 +439,14 @@ RSI_OVERBOUGHT=70              # Overbought threshold
 
 # Moving Averages
 SMA_SHORT_PERIOD=20            # Short-term SMA
-SMA_LONG_PERIOD=50             # Long-term SMA
+SMA_LONG_PERIOD=50             # Long-term SMA (enhanced)
 
 # Volatility
 VOLATILITY_WINDOW=20           # Volatility calculation window
+
+# Candle Analysis (NEW)
+CANDLE_INTERVALS="30s,1m,5m"   # Available candle intervals
+PRIMARY_CANDLE_INTERVAL="1m"    # Primary analysis interval
 ```
 
 ## 🛠️ Troubleshooting
@@ -388,7 +475,7 @@ ls -la data/trading_bot.db
 
 #### **Trading Logic Issues**
 ```bash
-# Check logs
+# Check logs with enhanced debugging
 tail -f logs/trading_logic.log
 
 # Verify wallet
@@ -396,6 +483,36 @@ solana balance
 
 # Test transaction binary
 ./solana-trading-bot/target/debug/transaction
+
+# Check candle aggregation (NEW)
+curl http://localhost:8080/candles/SOL%2FUSDC/1m?limit=10
+
+# Debug HTTP responses (NEW)
+# Look for "Raw candle response:" and "Raw price response:" in logs
+```
+
+#### **Candle Aggregation Issues (NEW)**
+```bash
+# Check if candles are being created
+curl http://localhost:8080/candles/SOL%2FUSDC/1m/latest
+
+# Verify price feed is running
+curl http://localhost:8080/prices/SOL%2FUSDC
+
+# Check candle aggregation logs
+# Look for "Created X candle for SOL/USDC" in price-feed logs
+```
+
+#### **HTTP Client Errors (NEW)**
+```bash
+# Check for EOF errors (should be resolved)
+grep "EOF while parsing" logs/trading_logic.log
+
+# Check for URL encoding issues
+grep "Raw.*response" logs/trading_logic.log
+
+# Verify database service is responding
+curl -v http://localhost:8080/health
 ```
 
 #### **Dashboard Not Loading**
@@ -435,8 +552,9 @@ echo 'PRAGMA journal_mode=WAL;' | sqlite3 data/trading_bot.db
 
 ### Expected Behavior
 
-- **Price Updates**: Every 1 second
-- **Trading Analysis**: Every 30 seconds
+- **Price Updates**: Every 1 second (raw data collection)
+- **Candle Creation**: Every 30 seconds (30s, 1m, 5m intervals)
+- **Trading Analysis**: Every 30 seconds (using 1-minute candles)
 - **Dashboard Refresh**: Every 2 seconds
 - **Signal Generation**: Based on confidence thresholds
 - **Position Duration**: 5 minutes to several hours
@@ -446,8 +564,10 @@ echo 'PRAGMA journal_mode=WAL;' | sqlite3 data/trading_bot.db
 - ✅ All services show "Running" status
 - ✅ Dashboard displays real-time data
 - ✅ Trading signals appear with confidence levels
-- ✅ Database stores historical data
-- ✅ No error messages in logs
+- ✅ Database stores historical data and candles
+- ✅ No EOF errors in trading-logic logs
+- ✅ Candle aggregation working (check price-feed logs)
+- ✅ Raw response logging shows valid JSON responses
 
 ## 🔒 Security
 

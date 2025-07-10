@@ -1217,12 +1217,20 @@ impl TradingEngine {
                 info!("💤 Database confirmed no open positions");
                 Ok(None)
             }
+            Ok(crate::models::ApiResponse { success: true, data: None, .. }) => {
+                info!("💤 Database confirmed no open positions (data is None)");
+                Ok(None)
+            }
             Ok(crate::models::ApiResponse { success: false, error: Some(e), .. }) => {
                 warn!("❌ Database error: {}", e);
                 Ok(None)
             }
-            _ => {
-                warn!("❌ Unexpected or invalid response format for open positions");
+            Ok(crate::models::ApiResponse { success: false, error: None, .. }) => {
+                warn!("❌ Database returned success: false with no error message");
+                Ok(None)
+            }
+            Err(e) => {
+                warn!("❌ Failed to parse database response: {}", e);
                 warn!("❌ Raw response: {}", text);
                 Ok(None)
             }
