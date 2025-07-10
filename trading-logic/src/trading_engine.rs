@@ -23,6 +23,7 @@ pub struct TradingEngine {
 struct Position {
     entry_price: f64,
     entry_time: chrono::DateTime<Utc>,
+    quantity: f64,
     position_type: PositionType,
 }
 
@@ -527,6 +528,7 @@ impl TradingEngine {
         self.current_position = Some(Position {
             entry_price: price,
             entry_time: Utc::now(),
+            quantity: 1.0, // Default quantity
             position_type,
         });
         
@@ -1205,6 +1207,7 @@ impl TradingEngine {
                 let position = Position {
                     entry_price: position_db.entry_price,
                     entry_time: position_db.entry_time,
+                    quantity: position_db.quantity,
                     position_type: match position_db.position_type.as_str() {
                         "long" => PositionType::Long,
                         "short" => PositionType::Short,

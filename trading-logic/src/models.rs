@@ -112,14 +112,24 @@ pub struct TradingSignalDb {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PositionDb {
+    pub id: String,
+    pub wallet_id: String,
     pub pair: String,
     pub position_type: String,
     pub entry_price: f64,
     pub entry_time: DateTime<Utc>,
     pub quantity: f64,
     pub status: String,
-    pub take_profit: f64,
-    pub stop_loss: f64,
+    pub exit_price: f64,
+    pub exit_time: Option<DateTime<Utc>>,
+    pub pnl: f64,
+    pub pnl_percent: f64,
+    pub duration_seconds: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub current_price: f64,
+    pub take_profit: Option<f64>,
+    pub stop_loss: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
