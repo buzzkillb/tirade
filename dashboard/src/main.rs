@@ -272,6 +272,36 @@ async fn index() -> Result<HttpResponse> {
             border-bottom-color: rgba(255,255,255,0.3);
         }
         
+        .pnl-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .pnl-card h2 {
+            color: white;
+            border-bottom-color: rgba(255,255,255,0.3);
+        }
+        
+        .positions-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .positions-card h2 {
+            color: white;
+            border-bottom-color: rgba(255,255,255,0.3);
+        }
+        
+        .trades-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .trades-card h2 {
+            color: white;
+            border-bottom-color: rgba(255,255,255,0.3);
+        }
+        
         .price-display {
             font-size: 2.5rem;
             font-weight: bold;
@@ -367,7 +397,7 @@ async fn index() -> Result<HttpResponse> {
                 <div id="price-change" class="price-change">Updating...</div>
             </div>
             
-            <div class="card">
+            <div class="card pnl-card">
                 <h2>📊 Total PnL</h2>
                 <div id="total-pnl" class="price-display">Loading...</div>
                 <div id="pnl-details">Loading details...</div>
@@ -375,12 +405,12 @@ async fn index() -> Result<HttpResponse> {
         </div>
         
         <div class="grid">
-            <div class="card">
+            <div class="card positions-card">
                 <h2>📈 Active Positions</h2>
                 <div id="active-positions">Loading...</div>
             </div>
             
-            <div class="card">
+            <div class="card trades-card">
                 <h2>💼 Recent Trades</h2>
                 <div id="recent-trades">Loading...</div>
             </div>
@@ -433,6 +463,7 @@ async fn index() -> Result<HttpResponse> {
             pnlDisplay.textContent = `${pnlSymbol}$${totalPnl.toFixed(2)}`;
             pnlDisplay.className = `price-display ${pnlClass}`;
             pnlDetails.textContent = `Total PnL from all closed trades`;
+            pnlDetails.style.color = 'rgba(255,255,255,0.9)';
         }
         
         function updatePositions(positions) {
