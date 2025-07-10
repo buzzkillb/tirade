@@ -2122,6 +2122,7 @@ async fn index() -> Result<HttpResponse> {
             container.innerHTML = trades.slice(0, 5).map(trade => {
                 // Format the trade details based on trade type
                 let tradeDetails = '';
+                let usdcDetails = '';
                 let tradeIcon = '';
                 
                 if (trade.trade_type.toLowerCase() === 'buy') {
@@ -2131,7 +2132,7 @@ async fn index() -> Result<HttpResponse> {
                     const usdcSpent = trade.total_value.toFixed(2);
                     const pricePerSol = (trade.total_value / trade.quantity).toFixed(4);
                     tradeDetails = `${solQuantity} SOL ($${pricePerSol} each)`;
-                    const usdcDetails = `Spent: $${usdcSpent} USDC`;
+                    usdcDetails = `Spent: $${usdcSpent} USDC`;
                 } else if (trade.trade_type.toLowerCase() === 'sell') {
                     tradeIcon = '🔴';
                     // For sell trades: show SOL sold and USDC received
@@ -2139,11 +2140,11 @@ async fn index() -> Result<HttpResponse> {
                     const usdcReceived = trade.total_value.toFixed(2);
                     const pricePerSol = (trade.total_value / trade.quantity).toFixed(4);
                     tradeDetails = `${solQuantity} SOL ($${pricePerSol} each)`;
-                    const usdcDetails = `Received: $${usdcReceived} USDC`;
+                    usdcDetails = `Received: $${usdcReceived} USDC`;
                 } else {
                     tradeIcon = '🟡';
                     tradeDetails = `$${trade.total_value.toFixed(2)}`;
-                    const usdcDetails = '';
+                    usdcDetails = '';
                 }
                 
                 // Format timestamp
