@@ -17,7 +17,6 @@ pub struct TradingEngine {
     current_position: Option<Position>,
     last_analysis_time: Option<chrono::DateTime<Utc>>,
     trading_executor: TradingExecutor,
-    last_signal_time: Option<chrono::DateTime<Utc>>, // Add signal cooldown tracking
 }
 
 #[derive(Debug, Clone)]
@@ -49,7 +48,6 @@ impl TradingEngine {
             current_position: None,
             last_analysis_time: None,
             trading_executor,
-            last_signal_time: None,
         })
     }
 
@@ -204,9 +202,8 @@ impl TradingEngine {
         // Step 4: Analyze and generate signal
         let signal = self.strategy.analyze(&prices, &consolidated_indicators);
 
-        // Step 4.5: STRICT position and signal validation
+        // Step 4.5: STRICT position validation (no cooldown needed)
         let now = Utc::now();
-        let signal_cooldown_secs = 300; // 5 minutes cooldown between signals
         
         // CRITICAL: Double-check position state before any signal execution
         let has_position = self.current_position.is_some();
@@ -229,25 +226,6 @@ impl TradingEngine {
             return Ok(());
         }
         
-        // Check signal cooldown for other signals
-        if let Some(last_signal) = self.last_signal_time {
-            let time_since_last_signal = now - last_signal;
-            if time_since_last_signal.num_seconds() < signal_cooldown_secs {
-                let remaining_cooldown = signal_cooldown_secs - time_since_last_signal.num_seconds();
-                debug!("⏰ Signal cooldown active: {}s remaining (signal: {:?}, confidence: {:.1}%)", 
-                       remaining_cooldown, signal.signal_type, signal.confidence * 100.0);
-                
-                // Still post the signal to database for monitoring, but don't execute
-                if let Err(e) = self.post_trading_signal(&signal).await {
-                    warn!("Failed to post signal: {}", e);
-                }
-                
-                // Log the analysis but skip execution
-                self.log_analysis(&signal, &prices, &consolidated_indicators);
-                return Ok(());
-            }
-        }
-
         // Step 4.6: Post trading signal to database
         if let Err(e) = self.post_trading_signal(&signal).await {
             warn!("Failed to post signal: {}", e);
@@ -256,12 +234,6 @@ impl TradingEngine {
         // Step 5: Execute trading logic
         self.execute_signal(&signal).await?;
         
-        // Step 5.5: Update last signal time if signal was executed
-        if signal.signal_type != SignalType::Hold {
-            self.last_signal_time = Some(now);
-            info!("⏰ Signal cooldown started: Next signal allowed in {}s", signal_cooldown_secs);
-        }
-
         // Step 6: Log the analysis
         self.log_analysis(&signal, &prices, &consolidated_indicators);
 
