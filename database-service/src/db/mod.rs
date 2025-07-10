@@ -756,7 +756,12 @@ impl Database {
             (entry_price - request.exit_price) * quantity
         };
 
-        let pnl_percent = (pnl / (entry_price * quantity)) * 100.0;
+        // Calculate percentage based on price change (same as trading logic)
+        let pnl_percent = if position_type == "long" {
+            ((request.exit_price - entry_price) / entry_price) * 100.0
+        } else {
+            ((entry_price - request.exit_price) / entry_price) * 100.0
+        };
         let duration_seconds = (now - entry_time).num_seconds();
 
         sqlx::query(
@@ -1121,8 +1126,13 @@ impl Database {
                     (entry_price - current_price) * quantity
                 };
                 
+                // Calculate percentage the same way as trading logic - based on price change
                 let unrealized_pnl_percent = if entry_price > 0.0 {
-                    (unrealized_pnl / (entry_price * quantity)) * 100.0
+                    if position_type == "long" {
+                        ((current_price - entry_price) / entry_price) * 100.0
+                    } else {
+                        ((entry_price - current_price) / entry_price) * 100.0
+                    }
                 } else {
                     0.0
                 };
