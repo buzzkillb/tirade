@@ -1163,7 +1163,7 @@ impl Database {
             SELECT 
                 id,
                 pair,
-                position_type as trade_type,
+                position_type,
                 entry_price as price,
                 quantity,
                 entry_time as timestamp,
@@ -1180,16 +1180,35 @@ impl Database {
 
         let trades: Vec<crate::models::Trade> = rows
             .into_iter()
-            .map(|row| crate::models::Trade {
-                id: row.try_get("id").unwrap_or_default(),
-                pair: row.try_get("pair").unwrap_or_default(),
-                trade_type: row.try_get("trade_type").unwrap_or_default(),
-                price: row.try_get("price").unwrap_or_default(),
-                quantity: row.try_get("quantity").unwrap_or_default(),
-                total_value: row.try_get::<f64, _>("price").unwrap_or_default() * row.try_get::<f64, _>("quantity").unwrap_or_default(),
-                timestamp: row.try_get("timestamp").unwrap_or_default(),
-                status: row.try_get("status").unwrap_or_default(),
-                created_at: row.try_get("created_at").unwrap_or_default(),
+            .map(|row| {
+                let position_type: String = row.try_get("position_type").unwrap_or_default();
+                let status: String = row.try_get("status").unwrap_or_default();
+                
+                // Map position_type to trade_type
+                let trade_type = if status == "open" {
+                    // For open positions, assume it was a BUY
+                    "buy".to_string()
+                } else {
+                    // For closed positions, we need to determine if it was a buy or sell
+                    // Since we don't have actual trade records, we'll use position_type as a proxy
+                    match position_type.to_lowercase().as_str() {
+                        "long" => "buy".to_string(),
+                        "short" => "sell".to_string(),
+                        _ => "buy".to_string(), // Default to buy
+                    }
+                };
+                
+                crate::models::Trade {
+                    id: row.try_get("id").unwrap_or_default(),
+                    pair: row.try_get("pair").unwrap_or_default(),
+                    trade_type,
+                    price: row.try_get("price").unwrap_or_default(),
+                    quantity: row.try_get("quantity").unwrap_or_default(),
+                    total_value: row.try_get::<f64, _>("price").unwrap_or_default() * row.try_get::<f64, _>("quantity").unwrap_or_default(),
+                    timestamp: row.try_get("timestamp").unwrap_or_default(),
+                    status: row.try_get("status").unwrap_or_default(),
+                    created_at: row.try_get("created_at").unwrap_or_default(),
+                }
             })
             .collect();
 

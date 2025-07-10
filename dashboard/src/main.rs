@@ -2126,19 +2126,24 @@ async fn index() -> Result<HttpResponse> {
                 
                 if (trade.trade_type.toLowerCase() === 'buy') {
                     tradeIcon = '🟢';
-                    // For buy trades: show SOL received for USDC spent
+                    // For buy trades: show SOL received and USDC spent
                     const solQuantity = trade.quantity.toFixed(6);
                     const usdcSpent = trade.total_value.toFixed(2);
-                    tradeDetails = `${solQuantity} SOL for $${usdcSpent} USDC`;
+                    const pricePerSol = (trade.total_value / trade.quantity).toFixed(4);
+                    tradeDetails = `${solQuantity} SOL ($${pricePerSol} each)`;
+                    const usdcDetails = `Spent: $${usdcSpent} USDC`;
                 } else if (trade.trade_type.toLowerCase() === 'sell') {
                     tradeIcon = '🔴';
-                    // For sell trades: show SOL sold for USDC received
+                    // For sell trades: show SOL sold and USDC received
                     const solQuantity = trade.quantity.toFixed(6);
                     const usdcReceived = trade.total_value.toFixed(2);
-                    tradeDetails = `${solQuantity} SOL for $${usdcReceived} USDC`;
+                    const pricePerSol = (trade.total_value / trade.quantity).toFixed(4);
+                    tradeDetails = `${solQuantity} SOL ($${pricePerSol} each)`;
+                    const usdcDetails = `Received: $${usdcReceived} USDC`;
                 } else {
                     tradeIcon = '🟡';
                     tradeDetails = `$${trade.total_value.toFixed(2)}`;
+                    const usdcDetails = '';
                 }
                 
                 // Format timestamp
@@ -2152,6 +2157,7 @@ async fn index() -> Result<HttpResponse> {
                         </div>
                         <div style="color: #e0e0e0; font-size: 0.9rem;">${trade.pair}</div>
                         <div style="color: #14f195; font-weight: bold; font-size: 1rem;">${tradeDetails}</div>
+                        <div style="color: #ff6b6b; font-size: 0.9rem;">${usdcDetails}</div>
                     </div>
                 `;
             }).join('');
