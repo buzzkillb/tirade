@@ -117,7 +117,7 @@ impl TradingExecutor {
         })
     }
 
-    pub async fn execute_signal(&self, signal: &TradingSignal) -> Result<(bool, Option<f64>)> {
+    pub async fn execute_signal(&self, signal: &TradingSignal, sell_quantity: Option<f64>) -> Result<(bool, Option<f64>)> {
         // Check if trading execution is enabled
         if !self.enable_execution {
             info!("🔄 Paper trading mode - signal would be executed: {:?} at ${:.4}", 
@@ -140,18 +140,13 @@ impl TradingExecutor {
         
         match signal.signal_type {
             SignalType::Buy => {
-                let success = self.execute_buy_signal(signal, &balance).await?;
-                // For buy signals, return the SOL quantity received
-                let quantity = if success {
-                    // Get the SOL quantity from the last transaction result
-                    self.get_last_transaction_sol_quantity().await?
-                } else {
-                    None
-                };
-                Ok((success, quantity))
+                let sol_quantity = self.execute_buy_signal(signal, &balance).await?;
+                let success = sol_quantity.is_some();
+                Ok((success, sol_quantity))
             }
             SignalType::Sell => {
-                let success = self.execute_sell_signal(signal, &balance).await?;
+                // For sell signals, we need the exact quantity that was bought
+                let success = self.execute_sell_signal(signal, &balance, sell_quantity).await?;
                 Ok((success, None)) // No quantity needed for sell
             }
             SignalType::Hold => {
@@ -218,7 +213,7 @@ impl TradingExecutor {
         }
     }
 
-    async fn execute_buy_signal(&self, _signal: &TradingSignal, balance: &WalletBalance) -> Result<bool> {
+    async fn execute_buy_signal(&self, _signal: &TradingSignal, balance: &WalletBalance) -> Result<Option<f64>> {
         info!("🟢 Executing BUY signal...");
         
         // Calculate position size based on USDC balance
@@ -226,7 +221,7 @@ impl TradingExecutor {
         
         if position_size_usdc < 1.0 {
             warn!("⚠️  Insufficient USDC balance for trade: ${:.2} USDC", balance.usdc_balance);
-            return Ok(false);
+            return Ok(None);
         }
 
         info!("💰 Using ${:.2} USDC for trade (${:.2} available)", position_size_usdc, balance.usdc_balance);
@@ -244,8 +239,9 @@ impl TradingExecutor {
             }
             if let (Some(sol_change), Some(usdc_change)) = (result.sol_change, result.usdc_change) {
                 info!("💱 Received {:.6} SOL for ${:.2} USDC", sol_change, usdc_change.abs());
+                return Ok(Some(sol_change));
             }
-            Ok(true)
+            Ok(None)
         } else {
             let error_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
             error!("❌ BUY trade failed: {}", error_msg);
@@ -253,7 +249,7 @@ impl TradingExecutor {
         }
     }
 
-    async fn execute_sell_signal(&self, _signal: &TradingSignal, balance: &WalletBalance) -> Result<bool> {
+    async fn execute_sell_signal(&self, _signal: &TradingSignal, balance: &WalletBalance, sell_quantity: Option<f64>) -> Result<bool> {
         info!("🔴 Executing SELL signal...");
         
         // For sell signals, we need to check SOL balance
@@ -262,9 +258,22 @@ impl TradingExecutor {
             return Ok(false);
         }
 
-        // For sell signals, we should sell the same percentage of SOL as we used for buying
-        // This ensures we only sell the amount that was bought, not the entire balance
-        let position_size_sol = balance.sol_balance * self.position_size_percentage;
+        // Use the exact quantity that was bought, not a percentage of current balance
+        let position_size_sol = if let Some(quantity) = sell_quantity {
+            // Use the exact quantity that was bought
+            if quantity > balance.sol_balance {
+                warn!("⚠️  Requested sell quantity ({:.6} SOL) exceeds available balance ({:.6} SOL)", 
+                      quantity, balance.sol_balance);
+                warn!("🔄 Falling back to selling available balance");
+                balance.sol_balance
+            } else {
+                quantity
+            }
+        } else {
+            // Fallback to percentage-based calculation if no quantity provided
+            warn!("⚠️  No sell quantity provided, using percentage-based calculation");
+            balance.sol_balance * self.position_size_percentage
+        };
         
         info!("💰 Using {:.6} SOL for trade ({:.6} available)", position_size_sol, balance.sol_balance);
 

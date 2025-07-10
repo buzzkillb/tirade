@@ -365,7 +365,7 @@ impl TradingEngine {
                 if self.current_position.is_none() {
                     info!("🟢 BUY signal detected - no current position, executing trade...");
                     // Execute the trade using trading executor
-                    match self.trading_executor.execute_signal(signal).await {
+                    match self.trading_executor.execute_signal(signal, None).await {
                         Ok((true, quantity)) => {
                             // Trade executed successfully (or paper trading)
                             let actual_quantity = quantity.unwrap_or(1.0); // Default to 1.0 if no quantity available
@@ -414,7 +414,7 @@ impl TradingEngine {
                     let position_quantity = position.quantity;
                     
                     // Execute the trade using trading executor
-                    match self.trading_executor.execute_signal(signal).await {
+                    match self.trading_executor.execute_signal(signal, Some(position_quantity)).await {
                         Ok((true, _)) => {
                             // Trade executed successfully (or paper trading)
                             let pnl = self.calculate_pnl(signal.price, position);
