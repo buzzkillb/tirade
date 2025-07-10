@@ -314,23 +314,9 @@ async fn fetch_fresh_dashboard_data(state: &web::Data<AppState>) -> DashboardDat
 
     // Process signals
     if let Ok(signals) = signals_result {
-        // Calculate market sentiment efficiently
-        let four_hours_ago = Utc::now() - chrono::Duration::hours(4);
-        let (bullish_count, bearish_count) = signals.iter()
-            .filter(|s| s.timestamp > four_hours_ago)
-            .fold((0, 0), |(bull, bear), s| {
-                match s.signal_type.to_lowercase().as_str() {
-                    "buy" => (bull + 1, bear),
-                    "sell" => (bull, bear + 1),
-                    _ => (bull, bear),
-                }
-            });
-        
-        dashboard_data.market_sentiment = match bullish_count.cmp(&bearish_count) {
-            std::cmp::Ordering::Greater => format!("🐂 Bullish ({} bullish, {} bearish signals)", bullish_count, bearish_count),
-            std::cmp::Ordering::Less => format!("🐻 Bearish ({} bullish, {} bearish signals)", bullish_count, bearish_count),
-            std::cmp::Ordering::Equal => format!("⚖️ Neutral ({} bullish, {} bearish signals)", bullish_count, bearish_count),
-        };
+        // Since we now only get the latest signal, we can't calculate market sentiment from multiple signals
+        // We'll set a neutral sentiment for now, or you could fetch more signals specifically for sentiment
+        dashboard_data.market_sentiment = "⚖️ Neutral (Latest signal only)".to_string();
         
         dashboard_data.latest_signals = signals;
         if let Some(latest_signal) = dashboard_data.latest_signals.first() {
@@ -522,9 +508,9 @@ async fn fetch_signals(client: &reqwest::Client, database_url: &str) -> Result<V
     if let Ok(api_response) = response.json::<serde_json::Value>().await {
         if let Some(signals_array) = api_response["data"].as_array() {
             if let Ok(mut signals) = serde_json::from_value::<Vec<TradingSignal>>(serde_json::Value::Array(signals_array.clone())) {
-                // Enhance signals with candle data
-                for signal in &mut signals {
-                    // Fetch the latest 1-minute candle for this signal's timestamp
+                // Only return the latest signal
+                if let Some(latest_signal) = signals.first_mut() {
+                    // Enhance the latest signal with candle data
                     if let Ok(candle_response) = client
                         .get(&format!("{}/candles/SOL%2FUSDC/1m/latest", database_url))
                         .timeout(Duration::from_secs(3))
@@ -534,13 +520,13 @@ async fn fetch_signals(client: &reqwest::Client, database_url: &str) -> Result<V
                         if let Ok(candle_api_response) = candle_response.json::<serde_json::Value>().await {
                             if let Some(candle_data) = candle_api_response["data"].as_object() {
                                 if let Ok(candle) = serde_json::from_value::<CandleData>(serde_json::Value::Object(candle_data.clone())) {
-                                    signal.candle_data = Some(candle);
+                                    latest_signal.candle_data = Some(candle);
                                 }
                             }
                         }
                     }
+                    return Ok(vec![latest_signal.clone()]);
                 }
-                return Ok(signals);
             }
         }
     }
