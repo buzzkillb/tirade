@@ -512,8 +512,22 @@ async fn fetch_performance(client: &reqwest::Client, database_url: &str) -> Resu
         .send()
         .await?;
     
-    if let Ok(performance) = response.json::<PerformanceMetrics>().await {
-        return Ok(performance);
+    if let Ok(api_response) = response.json::<serde_json::Value>().await {
+        if let Some(metrics_data) = api_response["data"].as_object() {
+            let performance = PerformanceMetrics {
+                total_trades: metrics_data["total_trades"].as_i64().unwrap_or(0),
+                winning_trades: metrics_data["winning_trades"].as_i64().unwrap_or(0),
+                losing_trades: metrics_data["losing_trades"].as_i64().unwrap_or(0),
+                win_rate: metrics_data["win_rate"].as_f64().unwrap_or(0.0),
+                total_pnl: metrics_data["total_pnl"].as_f64().unwrap_or(0.0),
+                total_pnl_percent: metrics_data["total_pnl_percent"].as_f64().unwrap_or(0.0),
+                avg_trade_pnl: metrics_data["avg_trade_pnl"].as_f64().unwrap_or(0.0),
+                max_drawdown: metrics_data["max_drawdown"].as_f64().unwrap_or(0.0),
+                sharpe_ratio: metrics_data["sharpe_ratio"].as_f64().unwrap_or(0.0),
+                total_volume: metrics_data["total_volume"].as_f64().unwrap_or(0.0),
+            };
+            return Ok(performance);
+        }
     }
     
     Ok(PerformanceMetrics {

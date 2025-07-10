@@ -1157,20 +1157,25 @@ impl Database {
     }
 
     pub async fn get_recent_trades(&self, limit: i64) -> Result<Vec<crate::models::Trade>> {
-        // Since trades table is empty, return recent positions as trades
+        // Get both entry and exit trades from positions
         let rows = sqlx::query(
             r#"
             SELECT 
                 id,
                 pair,
                 position_type,
-                entry_price as price,
+                entry_price,
+                exit_price,
                 quantity,
-                entry_time as timestamp,
+                entry_time,
+                exit_time,
                 created_at,
-                status
+                status,
+                pnl,
+                pnl_percent
             FROM positions 
-            ORDER BY entry_time DESC
+            WHERE status = 'closed'
+            ORDER BY exit_time DESC
             LIMIT ?
             "#,
         )
@@ -1178,52 +1183,52 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
 
-        let trades: Vec<crate::models::Trade> = rows
-            .into_iter()
-            .map(|row| {
-                let position_type: String = row.try_get("position_type").unwrap_or_default();
-                let status: String = row.try_get("status").unwrap_or_default();
-                
-                // Map position_type to trade_type
-                let trade_type = if status == "open" {
-                    // For open positions, assume it was a BUY
-                    "buy".to_string()
-                } else {
-                    // For closed positions, we need to determine if it was a buy or sell
-                    // Since we don't have actual trade records, we'll use position_type as a proxy
-                    match position_type.to_lowercase().as_str() {
-                        "long" => "buy".to_string(),
-                        "short" => "sell".to_string(),
-                        _ => "buy".to_string(), // Default to buy
-                    }
-                };
-                
-                let price: f64 = row.try_get("price").unwrap_or_default();
-                let quantity: f64 = row.try_get("quantity").unwrap_or_default();
-                
-                // For buy trades, total_value should be the USDC amount spent
-                // For sell trades, total_value should be the USDC amount received
-                let total_value = if trade_type == "buy" {
-                    // USDC spent = SOL quantity * price per SOL
-                    quantity * price
-                } else {
-                    // USDC received = SOL quantity * price per SOL
-                    quantity * price
-                };
-                
-                crate::models::Trade {
-                    id: row.try_get("id").unwrap_or_default(),
-                    pair: row.try_get("pair").unwrap_or_default(),
-                    trade_type,
-                    price,
-                    quantity,
-                    total_value,
-                    timestamp: row.try_get("timestamp").unwrap_or_default(),
-                    status: row.try_get("status").unwrap_or_default(),
-                    created_at: row.try_get("created_at").unwrap_or_default(),
-                }
-            })
-            .collect();
+        let mut trades: Vec<crate::models::Trade> = Vec::new();
+        
+        for row in rows {
+            let position_id: String = row.try_get("id").unwrap_or_default();
+            let pair: String = row.try_get("pair").unwrap_or_default();
+            let quantity: f64 = row.try_get("quantity").unwrap_or_default();
+            let entry_price: f64 = row.try_get("entry_price").unwrap_or_default();
+            let exit_price: f64 = row.try_get("exit_price").unwrap_or_default();
+            let entry_time: DateTime<Utc> = row.try_get("entry_time").unwrap_or_default();
+            let exit_time: DateTime<Utc> = row.try_get("exit_time").unwrap_or_default();
+            let pnl: f64 = row.try_get("pnl").unwrap_or_default();
+            let pnl_percent: f64 = row.try_get("pnl_percent").unwrap_or_default();
+            
+            // Create BUY trade (entry)
+            let buy_trade = crate::models::Trade {
+                id: format!("{}_buy", position_id),
+                pair: pair.clone(),
+                trade_type: "buy".to_string(),
+                price: entry_price,
+                quantity,
+                total_value: quantity * entry_price,
+                timestamp: entry_time,
+                status: "completed".to_string(),
+                created_at: entry_time,
+            };
+            
+            // Create SELL trade (exit)
+            let sell_trade = crate::models::Trade {
+                id: format!("{}_sell", position_id),
+                pair,
+                trade_type: "sell".to_string(),
+                price: exit_price,
+                quantity,
+                total_value: quantity * exit_price,
+                timestamp: exit_time,
+                status: "completed".to_string(),
+                created_at: exit_time,
+            };
+            
+            trades.push(sell_trade); // Add sell first (more recent)
+            trades.push(buy_trade);  // Add buy second
+        }
+        
+        // Sort by timestamp (most recent first) and limit
+        trades.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        trades.truncate(limit as usize);
 
         Ok(trades)
     }
