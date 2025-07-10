@@ -1157,7 +1157,7 @@ impl Database {
     }
 
     pub async fn get_recent_trades(&self, limit: i64) -> Result<Vec<crate::models::Trade>> {
-        // Get both entry and exit trades from positions
+        // Get both entry and exit trades from all recent positions (open and closed)
         let rows = sqlx::query(
             r#"
             SELECT 
@@ -1174,8 +1174,7 @@ impl Database {
                 pnl,
                 pnl_percent
             FROM positions 
-            WHERE status = 'closed'
-            ORDER BY exit_time DESC
+            ORDER BY entry_time DESC
             LIMIT ?
             "#,
         )
@@ -1190,13 +1189,14 @@ impl Database {
             let pair: String = row.try_get("pair").unwrap_or_default();
             let quantity: f64 = row.try_get("quantity").unwrap_or_default();
             let entry_price: f64 = row.try_get("entry_price").unwrap_or_default();
-            let exit_price: f64 = row.try_get("exit_price").unwrap_or_default();
+            let exit_price: Option<f64> = row.try_get("exit_price").ok();
             let entry_time: DateTime<Utc> = row.try_get("entry_time").unwrap_or_default();
-            let exit_time: DateTime<Utc> = row.try_get("exit_time").unwrap_or_default();
+            let exit_time: Option<DateTime<Utc>> = row.try_get("exit_time").ok();
+            let status: String = row.try_get("status").unwrap_or_default();
             let pnl: f64 = row.try_get("pnl").unwrap_or_default();
             let pnl_percent: f64 = row.try_get("pnl_percent").unwrap_or_default();
             
-            // Create BUY trade (entry)
+            // Create BUY trade (entry) - always exists
             let buy_trade = crate::models::Trade {
                 id: format!("{}_buy", position_id),
                 pair: pair.clone(),
@@ -1205,25 +1205,27 @@ impl Database {
                 quantity,
                 total_value: quantity * entry_price,
                 timestamp: entry_time,
-                status: "completed".to_string(),
+                status: if status == "open" { "open".to_string() } else { "completed".to_string() },
                 created_at: entry_time,
             };
             
-            // Create SELL trade (exit)
-            let sell_trade = crate::models::Trade {
-                id: format!("{}_sell", position_id),
-                pair,
-                trade_type: "sell".to_string(),
-                price: exit_price,
-                quantity,
-                total_value: quantity * exit_price,
-                timestamp: exit_time,
-                status: "completed".to_string(),
-                created_at: exit_time,
-            };
+            trades.push(buy_trade);
             
-            trades.push(sell_trade); // Add sell first (more recent)
-            trades.push(buy_trade);  // Add buy second
+            // Create SELL trade (exit) - only for closed positions
+            if let (Some(exit_price), Some(exit_time)) = (exit_price, exit_time) {
+                let sell_trade = crate::models::Trade {
+                    id: format!("{}_sell", position_id),
+                    pair,
+                    trade_type: "sell".to_string(),
+                    price: exit_price,
+                    quantity,
+                    total_value: quantity * exit_price,
+                    timestamp: exit_time,
+                    status: "completed".to_string(),
+                    created_at: exit_time,
+                };
+                trades.push(sell_trade);
+            }
         }
         
         // Sort by timestamp (most recent first) and limit
