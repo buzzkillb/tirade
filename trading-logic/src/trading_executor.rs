@@ -186,7 +186,8 @@ impl TradingExecutor {
                     return Ok(false);
                 }
                 
-                let position_size_sol = balance.sol_balance * self.position_size_percentage;
+                // For sell signals, we should sell the full SOL balance (not just a percentage)
+                let position_size_sol = balance.sol_balance;
                 
                 let result = self.execute_transaction_command(
                     position_size_sol,
@@ -251,8 +252,8 @@ impl TradingExecutor {
             return Ok(false);
         }
 
-        // Calculate position size based on SOL balance
-        let position_size_sol = balance.sol_balance * self.position_size_percentage;
+        // For sell signals, we should sell the full SOL balance (not just a percentage)
+        let position_size_sol = balance.sol_balance;
         
         info!("💰 Using {:.6} SOL for trade ({:.6} available)", position_size_sol, balance.sol_balance);
 
