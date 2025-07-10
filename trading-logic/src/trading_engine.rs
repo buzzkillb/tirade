@@ -1339,7 +1339,7 @@ impl TradingEngine {
         // First, get the open position from the database to get its ID
         let wallet_address = self.trading_executor.get_wallet_address()?;
         let encoded_pair = encode(&self.config.trading_pair);
-        let url = format!("{}/positions/{}/open", self.config.database_url, encoded_pair);
+        let url = format!("{}/positions/pair/{}/open", self.config.database_url, encoded_pair);
         
         let response = self.client.get(&url).send().await?;
         if !response.status().is_success() {
@@ -1348,6 +1348,13 @@ impl TradingEngine {
         }
         
         let api_response: serde_json::Value = response.json().await?;
+        
+        // Check if data is null (no position found)
+        if api_response["data"].is_null() {
+            warn!("No open position found to close");
+            return Ok(());
+        }
+        
         if let Some(position_data) = api_response["data"].as_object() {
             if let Some(position_id) = position_data["id"].as_str() {
                 // Now close the position using the correct ID
@@ -1375,7 +1382,7 @@ impl TradingEngine {
                 warn!("No position ID found in response");
             }
         } else {
-            warn!("No open position found to close");
+            warn!("Invalid position data format in response");
         }
         
         Ok(())
