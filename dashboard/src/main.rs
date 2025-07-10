@@ -1314,6 +1314,159 @@ async fn index() -> Result<HttpResponse> {
             color: #9945ff;
         }
 
+        /* Enhanced Signal Header Styles */
+        .signal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .signal-main {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .signal-type {
+            font-size: 1.2rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .signal-confidence {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.9rem;
+            font-weight: bold;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid;
+        }
+
+        .signal-confidence.positive {
+            color: #14f195;
+            border-color: rgba(20, 241, 149, 0.3);
+        }
+
+        .signal-confidence.neutral {
+            color: #9945ff;
+            border-color: rgba(153, 69, 255, 0.3);
+        }
+
+        .signal-confidence.negative {
+            color: #ff6b6b;
+            border-color: rgba(255, 107, 107, 0.3);
+        }
+
+        .signal-meta {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 4px;
+        }
+
+        .signal-strength {
+            font-size: 0.8rem;
+            font-weight: bold;
+            padding: 2px 6px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.4);
+        }
+
+        .risk-level {
+            font-size: 0.8rem;
+            padding: 2px 6px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.4);
+        }
+
+        /* Enhanced Price Section */
+        .signal-price-section {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .price-main {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .price-label {
+            font-size: 0.9rem;
+            color: #888;
+        }
+
+        .price-value {
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: #14f195;
+        }
+
+        .price-changes {
+            display: flex;
+            gap: 8px;
+            font-size: 0.8rem;
+        }
+
+        /* Risk Metrics Section */
+        .signal-risk-metrics {
+            margin: 12px 0;
+            padding: 12px;
+            background: linear-gradient(145deg, rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.2));
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .risk-metrics-header {
+            font-size: 0.9rem;
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #e0e0e0;
+            text-align: center;
+        }
+
+        .risk-metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .risk-metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 8px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+
+        .metric-label {
+            color: #888;
+        }
+
+        .metric-value {
+            font-weight: bold;
+        }
+
+        .metric-value.positive {
+            color: #14f195;
+        }
+
+        .metric-value.negative {
+            color: #ff6b6b;
+        }
+
         /* Candle Information Styles */
         .candle-info {
             margin: 10px 0;
@@ -2087,18 +2240,61 @@ async fn index() -> Result<HttpResponse> {
                     `;
                 }
                 
+                // Calculate risk metrics and market context
+                const riskLevel = signal.confidence > 80 ? '🟢 Low Risk' : signal.confidence > 60 ? '🟡 Medium Risk' : '🔴 High Risk';
+                const signalStrength = signal.confidence > 80 ? '🔥 Strong' : signal.confidence > 60 ? '⚡ Moderate' : '💤 Weak';
+                const marketContext = getMarketContext(signal, priceChanges);
+                const riskRewardRatio = signal.take_profit && signal.stop_loss ? (signal.take_profit / signal.stop_loss).toFixed(2) : 'N/A';
+                
                 return `
                     <div class="signal-item signal-${signalClass} ${newClass}" data-signal-id="${signal.id}">
-                        <div><strong>${signal.signal_type.toUpperCase()}</strong> - ${(signal.confidence * 100).toFixed(1)}% confidence</div>
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <span>Price: $${signal.price.toFixed(4)}</span>
-                            <div style="display: flex; gap: 10px; font-size: 0.8rem;">
+                        <div class="signal-header">
+                            <div class="signal-main">
+                                <span class="signal-type">${signal.signal_type.toUpperCase()}</span>
+                                <span class="signal-confidence ${confidenceColor}">${(signal.confidence * 100).toFixed(1)}%</span>
+                            </div>
+                            <div class="signal-meta">
+                                <span class="signal-strength">${signalStrength}</span>
+                                <span class="risk-level">${riskLevel}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="signal-price-section">
+                            <div class="price-main">
+                                <span class="price-label">Entry Price:</span>
+                                <span class="price-value">$${signal.price.toFixed(4)}</span>
+                            </div>
+                            <div class="price-changes">
                                 ${priceChangeSpans}
                             </div>
                         </div>
+                        
                         ${candleInfo}
+                        
+                        <div class="signal-risk-metrics">
+                            <div class="risk-metrics-header">🎯 Risk Analysis</div>
+                            <div class="risk-metrics-grid">
+                                <div class="risk-metric">
+                                    <span class="metric-label">Risk/Reward:</span>
+                                    <span class="metric-value">${riskRewardRatio}:1</span>
+                                </div>
+                                <div class="risk-metric">
+                                    <span class="metric-label">Take Profit:</span>
+                                    <span class="metric-value positive">+${signal.take_profit ? (signal.take_profit * 100).toFixed(2) : 'N/A'}%</span>
+                                </div>
+                                <div class="risk-metric">
+                                    <span class="metric-label">Stop Loss:</span>
+                                    <span class="metric-value negative">-${signal.stop_loss ? (signal.stop_loss * 100).toFixed(2) : 'N/A'}%</span>
+                                </div>
+                                <div class="risk-metric">
+                                    <span class="metric-label">Market Context:</span>
+                                    <span class="metric-value">${marketContext}</span>
+                                </div>
+                            </div>
+                        </div>
+                        
                         <div class="signal-triggers">
-                            <div class="triggers-label">Signal Triggers:</div>
+                            <div class="triggers-label">🧠 Signal Triggers:</div>
                             <div class="triggers-grid">
                                 <label class="trigger-checkbox ${triggers.rsiDivergence ? 'active' : ''}">
                                     <input type="checkbox" ${triggers.rsiDivergence ? 'checked' : ''} disabled>
@@ -2142,8 +2338,9 @@ async fn index() -> Result<HttpResponse> {
                                 </label>
                             </div>
                         </div>
+                        
                         <div class="signal-reasoning">
-                            <div class="reasoning-label">Detailed Analysis:</div>
+                            <div class="reasoning-label">📊 Detailed Analysis:</div>
                             <div class="reasoning-text">
                                 ${Array.isArray(signal.reasoning) ? 
                                     signal.reasoning.map(reason => 
@@ -2289,6 +2486,71 @@ async fn index() -> Result<HttpResponse> {
             }
 
             return triggers;
+        }
+        
+        function getMarketContext(signal, priceChanges) {
+            const changes = [];
+            let overallTrend = 'neutral';
+            let trendStrength = 0;
+            
+            // Analyze price changes across timeframes
+            if (priceChanges.change_1h !== undefined && priceChanges.change_1h !== null) {
+                changes.push({ timeframe: '1h', change: priceChanges.change_1h });
+            }
+            if (priceChanges.change_4h !== undefined && priceChanges.change_4h !== null) {
+                changes.push({ timeframe: '4h', change: priceChanges.change_4h });
+            }
+            if (priceChanges.change_12h !== undefined && priceChanges.change_12h !== null) {
+                changes.push({ timeframe: '12h', change: priceChanges.change_12h });
+            }
+            if (priceChanges.change_24h !== undefined && priceChanges.change_24h !== null) {
+                changes.push({ timeframe: '24h', change: priceChanges.change_24h });
+            }
+            
+            if (changes.length > 0) {
+                const positiveChanges = changes.filter(c => c.change > 0).length;
+                const negativeChanges = changes.filter(c => c.change < 0).length;
+                const avgChange = changes.reduce((sum, c) => sum + c.change, 0) / changes.length;
+                
+                if (positiveChanges > negativeChanges && avgChange > 0.5) {
+                    overallTrend = 'bullish';
+                    trendStrength = Math.min(positiveChanges / changes.length * 100, 100);
+                } else if (negativeChanges > positiveChanges && avgChange < -0.5) {
+                    overallTrend = 'bearish';
+                    trendStrength = Math.min(negativeChanges / changes.length * 100, 100);
+                } else {
+                    overallTrend = 'neutral';
+                    trendStrength = 50;
+                }
+            }
+            
+            // Determine market context based on signal type and trend
+            const signalType = signal.signal_type.toLowerCase();
+            const confidence = signal.confidence;
+            
+            if (signalType === 'buy') {
+                if (overallTrend === 'bullish' && confidence > 0.7) {
+                    return '🚀 Strong Bullish Momentum';
+                } else if (overallTrend === 'bullish') {
+                    return '📈 Bullish Trend Following';
+                } else if (overallTrend === 'neutral' && confidence > 0.6) {
+                    return '🔄 Mean Reversion Opportunity';
+                } else {
+                    return '⚠️ Counter-Trend (High Risk)';
+                }
+            } else if (signalType === 'sell') {
+                if (overallTrend === 'bearish' && confidence > 0.7) {
+                    return '📉 Strong Bearish Momentum';
+                } else if (overallTrend === 'bearish') {
+                    return '📉 Bearish Trend Following';
+                } else if (overallTrend === 'neutral' && confidence > 0.6) {
+                    return '🔄 Mean Reversion Opportunity';
+                } else {
+                    return '⚠️ Counter-Trend (High Risk)';
+                }
+            } else {
+                return '⏸️ Market Consolidation';
+            }
         }
         
         function updateActivePositions(positions) {
