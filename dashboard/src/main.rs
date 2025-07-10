@@ -1900,17 +1900,13 @@ async fn index() -> Result<HttpResponse> {
                 priceMap[price.source.toLowerCase()] = price;
             });
 
-            // Order: Coinbase, Pyth, Jupiter (live API first)
-            const sourceOrder = ['coinbase', 'pyth', 'jupiter'];
+            // Order: Only Pyth
+            const sourceOrder = ['pyth'];
             const sourceIcons = {
-                'pyth': '🔮',
-                'jupiter': '🪐',
-                'coinbase': '🟢'
+                'pyth': '🔮'
             };
             const sourceNames = {
-                'pyth': 'Pyth',
-                'jupiter': 'Jupiter',
-                'coinbase': 'Coinbase'
+                'pyth': 'Pyth'
             };
 
             let exchangeCards = '';
