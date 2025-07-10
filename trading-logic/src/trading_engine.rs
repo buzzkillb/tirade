@@ -436,10 +436,7 @@ impl TradingEngine {
                             let duration = Utc::now() - entry_time;
                             self.close_position(signal.price).await?;
                             
-                            // Post trade to database
-                            if let Err(e) = self.post_trade(entry_price, signal.price, entry_time, &position_type, pnl).await {
-                                warn!("Failed to post trade: {}", e);
-                            }
+
                             
                             let pnl_emoji = if pnl > 0.0 { "💰" } else if pnl < 0.0 { "💸" } else { "➡️" };
                             let pnl_status = if pnl > 0.0 { "PROFIT" } else if pnl < 0.0 { "LOSS" } else { "BREAKEVEN" };
@@ -481,10 +478,7 @@ impl TradingEngine {
                         let duration = Utc::now() - entry_time;
                         self.close_position(signal.price).await?;
                         
-                        // Post trade to database
-                        if let Err(e) = self.post_trade(entry_price, signal.price, entry_time, &position_type, pnl).await {
-                            warn!("Failed to post trade: {}", e);
-                        }
+
                         
                         info!("");
                         info!("🛑 DYNAMIC STOP LOSS TRIGGERED");
@@ -506,10 +500,7 @@ impl TradingEngine {
                         let duration = Utc::now() - entry_time;
                         self.close_position(signal.price).await?;
                         
-                        // Post trade to database
-                        if let Err(e) = self.post_trade(entry_price, signal.price, entry_time, &position_type, pnl).await {
-                            warn!("Failed to post trade: {}", e);
-                        }
+
                         
                         info!("");
                         info!("💰 DYNAMIC TAKE PROFIT TRIGGERED");
@@ -561,6 +552,11 @@ impl TradingEngine {
             
             info!("📉 Closed position at ${:.4} - PnL: {:.2}% (Duration: {}s)", 
                   price, pnl * 100.0, duration.num_seconds());
+            
+            // Close position in database
+            if let Err(e) = self.close_position_in_database(price).await {
+                warn!("Failed to close position in database: {}", e);
+            }
         }
         
         self.current_position = None;
@@ -1334,6 +1330,42 @@ impl TradingEngine {
                 Err(e)
             }
         }
+    }
+
+    async fn close_position_in_database(&self, exit_price: f64) -> Result<()> {
+        use urlencoding::encode;
+        use serde_json::json;
+        if let Some(position) = &self.current_position {
+            // Fetch wallet address from trading executor
+            let wallet_address = self.trading_executor.get_wallet_address()?;
+            // Compose request
+            let request = json!({
+                "wallet_address": wallet_address,
+                "pair": self.config.trading_pair,
+                "position_type": match position.position_type {
+                    PositionType::Long => "long",
+                    PositionType::Short => "short",
+                },
+                "entry_price": position.entry_price,
+                "entry_time": position.entry_time,
+                "quantity": position.quantity,
+                "exit_price": exit_price,
+                "exit_time": chrono::Utc::now(),
+            });
+            let url = format!("{}/positions/close", self.config.database_url);
+            let response = self.client.post(&url)
+                .json(&request)
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+                warn!("Failed to close position in database: {} - {}", status, text);
+            } else {
+                debug!("Closed position in database at price: {}", exit_price);
+            }
+        }
+        Ok(())
     }
 
     // Helper functions for enhanced analysis
