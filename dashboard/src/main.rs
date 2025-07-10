@@ -248,8 +248,6 @@ async fn fetch_fresh_dashboard_data(state: &web::Data<AppState>) -> DashboardDat
     // Make all API calls in parallel for better performance
     let (
         pyth_price_result,
-        jupiter_price_result,
-        coinbase_price_result,
         indicators_result,
         signals_result,
         positions_result,
@@ -260,8 +258,6 @@ async fn fetch_fresh_dashboard_data(state: &web::Data<AppState>) -> DashboardDat
         signals_count_result,
     ) = tokio::join!(
         fetch_pyth_price(&state.client, &state.database_url),
-        fetch_jupiter_price(&state.client, &state.database_url),
-        fetch_coinbase_price_direct(&state.client), // Direct Coinbase API call for visual reference
         fetch_indicators(&state.client, &state.database_url),
         fetch_signals(&state.client, &state.database_url),
         fetch_positions(&state.client, &state.database_url),
@@ -272,30 +268,13 @@ async fn fetch_fresh_dashboard_data(state: &web::Data<AppState>) -> DashboardDat
         fetch_signals_count(&state.client, &state.database_url),
     );
 
-    // Process all price data sources
+    // Process only Pyth price data
     let mut all_prices = Vec::new();
     let mut latest_timestamp = None;
     
     if let Ok(Some(price)) = pyth_price_result {
         all_prices.push(price.clone());
-        if latest_timestamp.is_none() || price.timestamp > latest_timestamp.unwrap() {
-            latest_timestamp = Some(price.timestamp);
-        }
-    }
-    
-    if let Ok(Some(price)) = jupiter_price_result {
-        all_prices.push(price.clone());
-        if latest_timestamp.is_none() || price.timestamp > latest_timestamp.unwrap() {
-            latest_timestamp = Some(price.timestamp);
-        }
-    }
-
-    // Add Coinbase price for visual reference (not stored in database)
-    if let Ok(Some(price)) = coinbase_price_result {
-        all_prices.push(price.clone());
-        if latest_timestamp.is_none() || price.timestamp > latest_timestamp.unwrap() {
-            latest_timestamp = Some(price.timestamp);
-        }
+        latest_timestamp = Some(price.timestamp);
     }
     
     dashboard_data.latest_prices = all_prices;
@@ -419,48 +398,7 @@ async fn fetch_pyth_price(client: &reqwest::Client, database_url: &str) -> Resul
     Ok(None)
 }
 
-async fn fetch_jupiter_price(client: &reqwest::Client, database_url: &str) -> Result<Option<PriceData>, reqwest::Error> {
-    let response = client
-        .get(&format!("{}/prices/SOL%2FUSDC/latest?source=jupiter", database_url))
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await?;
-    
-    if let Ok(api_response) = response.json::<serde_json::Value>().await {
-        if let Some(price_data) = api_response["data"].as_object() {
-            if let Ok(price) = serde_json::from_value::<PriceData>(serde_json::Value::Object(price_data.clone())) {
-                return Ok(Some(price));
-            }
-        }
-    }
-    Ok(None)
-}
 
-async fn fetch_coinbase_price_direct(client: &reqwest::Client) -> Result<Option<PriceData>, reqwest::Error> {
-    let response = client
-        .get("https://api.coinbase.com/v2/prices/SOL-USD/spot")
-        .timeout(Duration::from_secs(3))
-        .send()
-        .await?;
-    
-    if response.status().is_success() {
-        if let Ok(api_response) = response.json::<serde_json::Value>().await {
-            if let Some(price_str) = api_response["data"]["amount"].as_str() {
-                if let Ok(price_float) = price_str.parse::<f64>() {
-                    let price_data = PriceData {
-                        id: format!("coinbase-{}", chrono::Utc::now().timestamp()),
-                        source: "coinbase".to_string(),
-                        pair: "SOL/USD".to_string(),
-                        price: price_float,
-                        timestamp: chrono::Utc::now(),
-                    };
-                    return Ok(Some(price_data));
-                }
-            }
-        }
-    }
-    Ok(None)
-}
 
 async fn fetch_indicators(client: &reqwest::Client, database_url: &str) -> Result<Option<TechnicalIndicator>, reqwest::Error> {
     let response = client
