@@ -1198,13 +1198,26 @@ impl Database {
                     }
                 };
                 
+                let price: f64 = row.try_get("price").unwrap_or_default();
+                let quantity: f64 = row.try_get("quantity").unwrap_or_default();
+                
+                // For buy trades, total_value should be the USDC amount spent
+                // For sell trades, total_value should be the USDC amount received
+                let total_value = if trade_type == "buy" {
+                    // USDC spent = SOL quantity * price per SOL
+                    quantity * price
+                } else {
+                    // USDC received = SOL quantity * price per SOL
+                    quantity * price
+                };
+                
                 crate::models::Trade {
                     id: row.try_get("id").unwrap_or_default(),
                     pair: row.try_get("pair").unwrap_or_default(),
                     trade_type,
-                    price: row.try_get("price").unwrap_or_default(),
-                    quantity: row.try_get("quantity").unwrap_or_default(),
-                    total_value: row.try_get::<f64, _>("price").unwrap_or_default() * row.try_get::<f64, _>("quantity").unwrap_or_default(),
+                    price,
+                    quantity,
+                    total_value,
                     timestamp: row.try_get("timestamp").unwrap_or_default(),
                     status: row.try_get("status").unwrap_or_default(),
                     created_at: row.try_get("created_at").unwrap_or_default(),

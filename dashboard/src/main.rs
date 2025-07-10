@@ -2130,17 +2130,17 @@ async fn index() -> Result<HttpResponse> {
                     // For buy trades: show SOL received and USDC spent
                     const solQuantity = trade.quantity.toFixed(6);
                     const usdcSpent = trade.total_value.toFixed(2);
-                    const pricePerSol = (trade.total_value / trade.quantity).toFixed(4);
-                    tradeDetails = `${solQuantity} SOL ($${pricePerSol} each)`;
-                    usdcDetails = `Spent: $${usdcSpent} USDC`;
+                    const pricePerSol = trade.price.toFixed(4);
+                    tradeDetails = `${solQuantity} SOL`;
+                    usdcDetails = `Spent: $${usdcSpent} USDC ($${pricePerSol} each)`;
                 } else if (trade.trade_type.toLowerCase() === 'sell') {
                     tradeIcon = '🔴';
                     // For sell trades: show SOL sold and USDC received
                     const solQuantity = trade.quantity.toFixed(6);
                     const usdcReceived = trade.total_value.toFixed(2);
-                    const pricePerSol = (trade.total_value / trade.quantity).toFixed(4);
-                    tradeDetails = `${solQuantity} SOL ($${pricePerSol} each)`;
-                    usdcDetails = `Received: $${usdcReceived} USDC`;
+                    const pricePerSol = trade.price.toFixed(4);
+                    tradeDetails = `${solQuantity} SOL`;
+                    usdcDetails = `Received: $${usdcReceived} USDC ($${pricePerSol} each)`;
                 } else {
                     tradeIcon = '🟡';
                     tradeDetails = `$${trade.total_value.toFixed(2)}`;
