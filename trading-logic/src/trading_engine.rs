@@ -386,24 +386,34 @@ impl TradingEngine {
                             let actual_quantity = quantity.unwrap_or(1.0); // Default to 1.0 if no quantity available
                             self.open_position(signal.price, PositionType::Long, actual_quantity).await?;
                             
-                            // Post position to database
+                            // Post position to database - CRITICAL: Must succeed
                             if let Some(position) = &self.current_position {
-                                if let Err(e) = self.post_position(position, signal.take_profit, signal.stop_loss).await {
-                                    warn!("Failed to post position: {}", e);
+                                match self.post_position(position, signal.take_profit, signal.stop_loss).await {
+                                    Ok(_) => {
+                                        info!("");
+                                        info!("🟢 BUY SIGNAL EXECUTED");
+                                        info!("═══════════════════════════════════════════════════════════════");
+                                        info!("  💰 Entry Price: ${:.4}", signal.price);
+                                        info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
+                                        info!("  📊 Position Type: Long");
+                                        info!("  🎯 Dynamic Take Profit: {:.2}%", signal.take_profit * 100.0);
+                                        info!("  🛑 Dynamic Stop Loss: {:.2}%", signal.stop_loss * 100.0);
+                                        info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
+                                        info!("═══════════════════════════════════════════════════════════════");
+                                        info!("");
+                                    }
+                                    Err(e) => {
+                                        error!("❌ CRITICAL: Transaction succeeded but database logging failed: {}", e);
+                                        error!("🚫 Rolling back position in memory to prevent inconsistency");
+                                        // Roll back the position in memory since database logging failed
+                                        self.current_position = None;
+                                        return Err(anyhow!("Database logging failed after successful transaction: {}", e));
+                                    }
                                 }
+                            } else {
+                                error!("❌ CRITICAL: Position opened in memory but position is None");
+                                return Err(anyhow!("Position opened but position is None"));
                             }
-                            
-                            info!("");
-                            info!("🟢 BUY SIGNAL EXECUTED");
-                            info!("═══════════════════════════════════════════════════════════════");
-                            info!("  💰 Entry Price: ${:.4}", signal.price);
-                            info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
-                            info!("  📊 Position Type: Long");
-                            info!("  🎯 Dynamic Take Profit: {:.2}%", signal.take_profit * 100.0);
-                            info!("  🛑 Dynamic Stop Loss: {:.2}%", signal.stop_loss * 100.0);
-                            info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
-                            info!("═══════════════════════════════════════════════════════════════");
-                            info!("");
                         }
                         Ok((false, _)) => {
                             warn!("⚠️  BUY signal execution failed or was skipped");
@@ -1090,9 +1100,15 @@ impl TradingEngine {
             .await?;
             
         if !response.status().is_success() {
-            warn!("Failed to post position: {}", response.status());
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_msg = format!("Failed to post position to database: {} - {}", status, error_text);
+            error!("❌ {}", error_msg);
+            return Err(anyhow!(error_msg));
         } else {
-            debug!("Posted position: {:?} at ${:.4}", position.position_type, position.entry_price);
+            let response_text = response.text().await.unwrap_or_else(|_| "No response body".to_string());
+            info!("✅ Successfully posted position to database: {:?} at ${:.4}", position.position_type, position.entry_price);
+            debug!("📊 Database response: {}", response_text);
         }
         
         Ok(())
