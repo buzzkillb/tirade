@@ -15,6 +15,7 @@ pub struct Config {
     pub price_change_threshold: f64,
     pub stop_loss_threshold: f64,
     pub take_profit_threshold: f64,
+    pub min_confidence_threshold: f64,
 }
 
 impl Config {
@@ -69,6 +70,10 @@ impl Config {
                 .unwrap_or_else(|_| "0.015".to_string()) // 1.5%
                 .parse()
                 .map_err(|_| anyhow!("Invalid TAKE_PROFIT_THRESHOLD"))?,
+            min_confidence_threshold: env::var("MIN_CONFIDENCE_THRESHOLD")
+                .unwrap_or_else(|_| "0.5".to_string()) // 50%
+                .parse()
+                .map_err(|_| anyhow!("Invalid MIN_CONFIDENCE_THRESHOLD"))?,
         })
     }
 } 

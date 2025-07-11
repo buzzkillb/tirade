@@ -480,12 +480,21 @@ impl TradingEngine {
                 if let Some(position) = &self.current_position {
                     let pnl = self.calculate_pnl(signal.price, position);
                     
+                    // Minimum hold time check (5 minutes = 300 seconds)
+                    let duration = Utc::now() - position.entry_time;
+                    let min_hold_time_seconds = 300; // 5 minutes minimum hold
+                    
+                    if duration.num_seconds() < min_hold_time_seconds {
+                        debug!("⏳ Position held for {}s, minimum hold time is {}s - waiting for profit", 
+                               duration.num_seconds(), min_hold_time_seconds);
+                        return Ok(());
+                    }
+                    
                     // Stop loss check using dynamic threshold
                     if pnl < -signal.stop_loss {
                         let entry_price = position.entry_price;
                         let entry_time = position.entry_time;
                         let position_type = position.position_type.clone();
-                        let duration = Utc::now() - entry_time;
                         let position_quantity = position.quantity;
                         
                         // Execute the sell transaction first
