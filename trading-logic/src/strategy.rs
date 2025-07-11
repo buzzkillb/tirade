@@ -78,13 +78,13 @@ impl TradingStrategy {
         let (market_regime, trend_strength) = self.analyze_market_regime(prices, indicators);
         let (support_level, resistance_level) = self.calculate_support_resistance(prices);
         
-        // Base thresholds (adaptive based on market regime)
+        // Base thresholds (adaptive based on market regime) - INCREASED for better profitability
         let (base_rsi_oversold, base_rsi_overbought, base_take_profit, base_stop_loss, base_momentum_threshold) = 
             match market_regime {
-                MarketRegime::Trending => (30.0, 70.0, 0.04, 0.025, 0.003), // More aggressive in trends
-                MarketRegime::Ranging => (35.0, 65.0, 0.025, 0.015, 0.004), // Conservative in ranges
-                MarketRegime::Volatile => (25.0, 75.0, 0.05, 0.03, 0.006),  // Wide thresholds in volatility
-                MarketRegime::Consolidating => (40.0, 60.0, 0.02, 0.012, 0.002), // Tight in consolidation
+                MarketRegime::Trending => (30.0, 70.0, 0.06, 0.035, 0.003), // Higher take profit, wider stop loss
+                MarketRegime::Ranging => (35.0, 65.0, 0.04, 0.025, 0.004), // Increased take profit, wider stop loss
+                MarketRegime::Volatile => (25.0, 75.0, 0.07, 0.04, 0.006),  // Higher take profit, wider stop loss
+                MarketRegime::Consolidating => (40.0, 60.0, 0.035, 0.02, 0.002), // Increased take profit, wider stop loss
             };
         
         // Adjust based on volatility and trend strength
@@ -299,6 +299,17 @@ impl TradingStrategy {
             }
         }
 
+        // Strategy 5.5: Profit Taking with Momentum Weakening (NEW)
+        if let Some(rsi_fast) = short_term_indicators.rsi_fast {
+            // Sell when RSI is approaching overbought (60-70) and momentum is weakening
+            if rsi_fast > 60.0 && rsi_fast < dynamic_thresholds.rsi_overbought && 
+               short_term_indicators.price_momentum.unwrap_or(0.0) < 0.0 && signal_type == SignalType::Hold {
+                signal_type = SignalType::Sell;
+                confidence += 0.25;
+                reasoning.push(format!("Profit taking: RSI ({:.2}) approaching overbought with weakening momentum", rsi_fast));
+            }
+        }
+
         // Strategy 6: Price Momentum Confirmation (with dynamic thresholds)
         if short_term_indicators.price_change_percent.abs() > dynamic_thresholds.momentum_threshold {
             if short_term_indicators.price_change_percent > dynamic_thresholds.momentum_threshold && signal_type == SignalType::Buy {
@@ -374,6 +385,18 @@ impl TradingStrategy {
                 confidence += 0.30;
                 reasoning.push(format!("Support breakdown: Price (${:.4}) below support (${:.4})", 
                                      current_price, support));
+            }
+        }
+
+        // Strategy 8.5: Trend Reversal Profit Taking (NEW)
+        if let (Some(sma_short), Some(rsi_fast)) = (short_term_indicators.sma_short, short_term_indicators.rsi_fast) {
+            // Sell when price is above SMA but momentum is weakening and RSI is high
+            if current_price > sma_short && rsi_fast > 55.0 && 
+               short_term_indicators.price_momentum.unwrap_or(0.0) < -dynamic_thresholds.momentum_threshold && 
+               signal_type == SignalType::Hold {
+                signal_type = SignalType::Sell;
+                confidence += 0.20;
+                reasoning.push(format!("Trend reversal profit taking: Price above SMA but momentum weakening, RSI {:.2}", rsi_fast));
             }
         }
 
