@@ -297,6 +297,16 @@ async fn index() -> Result<HttpResponse> {
             border-bottom-color: rgba(255,255,255,0.3);
         }
         
+        .stats-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .stats-card h2 {
+            color: white;
+            border-bottom-color: rgba(255,255,255,0.3);
+        }
+        
         .trades-card {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
@@ -442,6 +452,11 @@ async fn index() -> Result<HttpResponse> {
             <div class="card pnl-card">
                 <h2>📊 Total PnL</h2>
                 <div id="total-pnl" class="price-display">Loading...</div>
+                <div id="pnl-details">Loading details...</div>
+            </div>
+            
+            <div class="card stats-card">
+                <h2>📈 Trading Stats</h2>
                 <div id="pnl-stats" class="pnl-stats">
                     <div class="stat-row">
                         <div class="stat-item">
@@ -528,14 +543,17 @@ async fn index() -> Result<HttpResponse> {
         
         function updatePnL(totalPnl, performanceMetrics) {
             const pnlDisplay = document.getElementById('total-pnl');
+            const pnlDetails = document.getElementById('pnl-details');
             
             const pnlClass = totalPnl >= 0 ? 'pnl-positive' : 'pnl-negative';
             const pnlSymbol = totalPnl >= 0 ? '+' : '';
             
             pnlDisplay.textContent = `${pnlSymbol}$${totalPnl.toFixed(2)}`;
             pnlDisplay.className = `price-display ${pnlClass}`;
+            pnlDetails.textContent = `Total PnL from all closed trades`;
+            pnlDetails.style.color = 'rgba(255,255,255,0.9)';
             
-            // Update performance statistics
+            // Update performance statistics in the stats card
             if (performanceMetrics) {
                 document.getElementById('total-trades').textContent = performanceMetrics.total_trades;
                 document.getElementById('win-rate').textContent = `${performanceMetrics.win_rate.toFixed(1)}%`;
