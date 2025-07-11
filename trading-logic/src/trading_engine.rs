@@ -490,8 +490,10 @@ impl TradingEngine {
                         return Ok(());
                     }
                     
-                    // Stop loss check using dynamic threshold
-                    if pnl < -signal.stop_loss {
+                    // Enhanced exit conditions for quick swaps
+                    let should_exit = self.check_enhanced_exit_conditions(signal, position, pnl).await?;
+                    
+                    if should_exit {
                         let entry_price = position.entry_price;
                         let entry_time = position.entry_time;
                         let position_type = position.position_type.clone();
@@ -504,56 +506,21 @@ impl TradingEngine {
                                 self.close_position(signal.price).await?;
                                 
                                 info!("");
-                                info!("🛑 DYNAMIC STOP LOSS TRIGGERED");
+                                info!("🚀 ENHANCED EXIT TRIGGERED");
                                 info!("═══════════════════════════════════════════════════════════════");
                                 info!("  💰 Exit Price: ${:.4}", signal.price);
                                 info!("  📈 Entry Price: ${:.4}", entry_price);
-                                info!("  💸 Loss: {:.2}%", pnl * 100.0);
-                                info!("  🎯 Dynamic Stop Loss Threshold: {:.2}%", signal.stop_loss * 100.0);
+                                info!("  💰 PnL: {:.2}%", pnl * 100.0);
                                 info!("  ⏱️  Duration: {}s", duration.num_seconds());
                                 info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
                                 info!("═══════════════════════════════════════════════════════════════");
                                 info!("");
                             }
                             Ok((false, _)) => {
-                                warn!("⚠️  STOP LOSS signal execution failed or was skipped");
+                                warn!("⚠️  ENHANCED EXIT signal execution failed or was skipped");
                             }
                             Err(e) => {
-                                error!("❌ STOP LOSS signal execution error: {}", e);
-                            }
-                        }
-                    }
-                    // Take profit check using dynamic threshold
-                    else if pnl > signal.take_profit {
-                        let entry_price = position.entry_price;
-                        let entry_time = position.entry_time;
-                        let position_type = position.position_type.clone();
-                        let duration = Utc::now() - entry_time;
-                        let position_quantity = position.quantity;
-                        
-                        // Execute the sell transaction first
-                        match self.trading_executor.execute_signal(signal, Some(position_quantity)).await {
-                            Ok((true, _)) => {
-                                // Trade executed successfully, now close position in database
-                                self.close_position(signal.price).await?;
-                                
-                                info!("");
-                                info!("💰 DYNAMIC TAKE PROFIT TRIGGERED");
-                                info!("═══════════════════════════════════════════════════════════════");
-                                info!("  💰 Exit Price: ${:.4}", signal.price);
-                                info!("  📈 Entry Price: ${:.4}", entry_price);
-                                info!("  💰 Profit: {:.2}%", pnl * 100.0);
-                                info!("  🎯 Dynamic Take Profit Threshold: {:.2}%", signal.take_profit * 100.0);
-                                info!("  ⏱️  Duration: {}s", duration.num_seconds());
-                                info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
-                                info!("═══════════════════════════════════════════════════════════════");
-                                info!("");
-                            }
-                            Ok((false, _)) => {
-                                warn!("⚠️  TAKE PROFIT signal execution failed or was skipped");
-                            }
-                            Err(e) => {
-                                error!("❌ TAKE PROFIT signal execution error: {}", e);
+                                error!("❌ ENHANCED EXIT signal execution error: {}", e);
                             }
                         }
                     }
@@ -1579,5 +1546,70 @@ impl TradingEngine {
             support_level: None,
             resistance_level: None,
         }
+    }
+    
+    // Enhanced exit conditions for quick swaps
+    async fn check_enhanced_exit_conditions(&self, signal: &TradingSignal, position: &Position, pnl: f64) -> Result<bool> {
+        // Get recent price data for analysis
+        let prices = self.fetch_price_history().await?;
+        
+        // 1. Traditional stop loss and take profit
+        if pnl < -signal.stop_loss {
+            info!("🛑 Stop loss triggered: {:.2}% < -{:.2}%", pnl * 100.0, signal.stop_loss * 100.0);
+            return Ok(true);
+        }
+        
+        if pnl > signal.take_profit {
+            info!("💰 Take profit triggered: {:.2}% > {:.2}%", pnl * 100.0, signal.take_profit * 100.0);
+            return Ok(true);
+        }
+        
+        // 2. Momentum decay exit (if momentum is weakening while in profit)
+        if pnl > 0.003 && self.strategy.detect_momentum_decay(&prices) {
+            info!("📉 Momentum decay exit: Profit {:.2}% but momentum weakening", pnl * 100.0);
+            return Ok(true);
+        }
+        
+        // 3. RSI divergence exit (if RSI weakening while in profit)
+        // Calculate current RSI and momentum from price data
+        let price_values: Vec<f64> = prices.iter().map(|p| p.price).collect();
+        if let Some(rsi) = self.strategy.calculate_rsi(&price_values, 14) {
+            let price_momentum = self.strategy.calculate_price_momentum(&price_values).unwrap_or(0.0);
+            if self.strategy.should_exit_rsi_divergence(rsi, price_momentum, pnl) {
+                info!("📊 RSI divergence exit: RSI {:.1}, momentum {:.3}, profit {:.2}%", 
+                      rsi, price_momentum, pnl * 100.0);
+                return Ok(true);
+            }
+        }
+        
+        // 4. Time-based exit for small profits (if held too long with small profit)
+        let duration = Utc::now() - position.entry_time;
+        let max_hold_time_seconds = 1800; // 30 minutes max hold
+        
+        if duration.num_seconds() > max_hold_time_seconds && pnl > 0.002 {
+            info!("⏰ Time-based exit: Held {}s with {:.2}% profit", 
+                  duration.num_seconds(), pnl * 100.0);
+            return Ok(true);
+        }
+        
+        // 5. Small profit exit (if profit is small but stable)
+        if pnl > 0.005 && pnl < 0.01 {
+            // Check if price has been stable for last 5 minutes
+            let recent_prices = self.get_recent_prices(&prices, 300); // 5 minutes
+            if recent_prices.len() >= 5 {
+                let price_volatility = self.calculate_volatility(
+                    &recent_prices.iter().map(|p| p.price).collect::<Vec<f64>>(), 
+                    5
+                ).unwrap_or(0.0);
+                
+                if price_volatility < 0.005 { // Low volatility
+                    info!("🎯 Small profit exit: {:.2}% profit with low volatility {:.3}%", 
+                          pnl * 100.0, price_volatility * 100.0);
+                    return Ok(true);
+                }
+            }
+        }
+        
+        Ok(false)
     }
 } 

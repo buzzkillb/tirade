@@ -22,7 +22,7 @@ pub struct DynamicThresholds {
     pub resistance_level: Option<f64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MarketRegime {
     Trending,
     Ranging,
@@ -78,6 +78,9 @@ impl TradingStrategy {
         let (market_regime, trend_strength) = self.analyze_market_regime(prices, indicators);
         let (support_level, resistance_level) = self.calculate_support_resistance(prices);
         
+        // Calculate realistic targets based on historical data
+        let (realistic_take_profit, realistic_stop_loss) = self.calculate_realistic_targets(prices);
+        
         // Base thresholds (adaptive based on market regime) - INCREASED for better profitability
         let (base_rsi_oversold, base_rsi_overbought, base_take_profit, base_stop_loss, base_momentum_threshold) = 
             match market_regime {
@@ -86,6 +89,22 @@ impl TradingStrategy {
                 MarketRegime::Volatile => (25.0, 75.0, 0.07, 0.04, 0.006),  // Higher take profit, wider stop loss
                 MarketRegime::Consolidating => (40.0, 60.0, 0.035, 0.02, 0.002), // Increased take profit, wider stop loss
             };
+        
+        // Use realistic targets instead of fixed percentages for consolidating markets
+        let (take_profit, stop_loss) = if market_regime == MarketRegime::Consolidating {
+            (realistic_take_profit, realistic_stop_loss)
+        } else {
+            // Adjust based on volatility and trend strength
+            let volatility_multiplier = if volatility > 0.05 {
+                1.3 + (trend_strength * 0.2) // Higher multiplier in strong trends
+            } else if volatility < 0.01 {
+                0.8 - (trend_strength * 0.1) // Lower multiplier in weak trends
+            } else {
+                1.0 + (trend_strength * 0.1) // Normal with trend adjustment
+            };
+            
+            (base_take_profit * volatility_multiplier, base_stop_loss * volatility_multiplier)
+        };
         
         // Adjust based on volatility and trend strength
         let volatility_multiplier = if volatility > 0.05 {
@@ -99,10 +118,6 @@ impl TradingStrategy {
         // Adjust RSI thresholds based on market regime and volatility
         let rsi_oversold = base_rsi_oversold + (volatility * 100.0 * 0.5) - (trend_strength * 5.0);
         let rsi_overbought = base_rsi_overbought - (volatility * 100.0 * 0.5) + (trend_strength * 5.0);
-        
-        // Adjust take profit and stop loss based on volatility and support/resistance
-        let take_profit = base_take_profit * volatility_multiplier;
-        let stop_loss = base_stop_loss * volatility_multiplier;
         
         // Adjust momentum threshold based on market conditions
         let momentum_threshold = base_momentum_threshold * volatility_multiplier;
@@ -122,6 +137,88 @@ impl TradingStrategy {
             support_level,
             resistance_level,
         }
+    }
+
+    // Calculate realistic profit targets based on historical data
+    fn calculate_realistic_targets(&self, prices: &[PriceFeed]) -> (f64, f64) {
+        if prices.len() < 24 {
+            // Fallback to conservative targets if not enough data
+            return (0.015, 0.008); // 1.5% take profit, 0.8% stop loss
+        }
+        
+        // Calculate hourly volatility over last 24 hours
+        let hourly_volatility = self.calculate_hourly_volatility(prices);
+        
+        // Calculate average hourly price movement
+        let hourly_moves = self.calculate_hourly_moves(prices);
+        let avg_hourly_move = hourly_moves.iter().sum::<f64>() / hourly_moves.len() as f64;
+        
+        // Take profit = 50% of average hourly move, but minimum 0.5%
+        let take_profit = (avg_hourly_move * 0.5).max(0.005);
+        
+        // Stop loss = 30% of average hourly move, but minimum 0.3%
+        let stop_loss = (avg_hourly_move * 0.3).max(0.003);
+        
+        info!("📈 Realistic Targets - Avg Hourly Move: {:.3}%, Take Profit: {:.3}%, Stop Loss: {:.3}%", 
+              avg_hourly_move * 100.0, take_profit * 100.0, stop_loss * 100.0);
+        
+        (take_profit, stop_loss)
+    }
+    
+    // Calculate hourly volatility
+    fn calculate_hourly_volatility(&self, prices: &[PriceFeed]) -> f64 {
+        if prices.len() < 24 {
+            return 0.02; // Default 2% volatility
+        }
+        
+        let mut hourly_returns = Vec::new();
+        for i in 1..prices.len() {
+            let current = prices[i].price;
+            let previous = prices[i-1].price;
+            let return_rate = (current - previous) / previous;
+            hourly_returns.push(return_rate.abs());
+        }
+        
+        let avg_return = hourly_returns.iter().sum::<f64>() / hourly_returns.len() as f64;
+        avg_return
+    }
+    
+    // Calculate hourly price movements
+    fn calculate_hourly_moves(&self, prices: &[PriceFeed]) -> Vec<f64> {
+        let mut moves = Vec::new();
+        
+        for i in 1..prices.len() {
+            let current = prices[i].price;
+            let previous = prices[i-1].price;
+            let move_pct = (current - previous) / previous;
+            moves.push(move_pct.abs());
+        }
+        
+        moves
+    }
+    
+    // Detect momentum decay for early exit
+    pub fn detect_momentum_decay(&self, prices: &[PriceFeed]) -> bool {
+        if prices.len() < 10 {
+            return false;
+        }
+        
+        // Calculate recent momentum (last 5 periods)
+        let recent_prices: Vec<f64> = prices.iter().rev().take(5).map(|p| p.price).collect();
+        let recent_momentum = self.calculate_price_momentum(&recent_prices).unwrap_or(0.0);
+        
+        // Calculate earlier momentum (periods 6-10)
+        let earlier_prices: Vec<f64> = prices.iter().rev().skip(5).take(5).map(|p| p.price).collect();
+        let earlier_momentum = self.calculate_price_momentum(&earlier_prices).unwrap_or(0.0);
+        
+        // Return true if momentum is declining significantly
+        recent_momentum < earlier_momentum * 0.7
+    }
+    
+    // Check for RSI divergence exit conditions
+    pub fn should_exit_rsi_divergence(&self, rsi: f64, price_momentum: f64, pnl: f64) -> bool {
+        // Exit if RSI is weakening while in profit
+        rsi > 60.0 && rsi < 70.0 && price_momentum < 0.0 && pnl > 0.003
     }
 
     pub fn calculate_custom_indicators(&self, prices: &[PriceFeed]) -> TradingIndicators {
@@ -597,7 +694,7 @@ impl TradingStrategy {
             .collect()
     }
 
-    fn calculate_rsi(&self, prices: &[f64], period: usize) -> Option<f64> {
+    pub fn calculate_rsi(&self, prices: &[f64], period: usize) -> Option<f64> {
         if prices.len() < period + 1 {
             return None;
         }
@@ -653,7 +750,7 @@ impl TradingStrategy {
         Some(variance.sqrt())
     }
 
-    fn calculate_price_momentum(&self, prices: &[f64]) -> Option<f64> {
+    pub fn calculate_price_momentum(&self, prices: &[f64]) -> Option<f64> {
         if prices.len() < 5 {
             return None;
         }
