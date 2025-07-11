@@ -43,6 +43,20 @@ pub struct Trade {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TradingSignal {
+    pub id: String,
+    pub pair: String,
+    pub signal_type: String,
+    pub confidence: f64,
+    pub price: f64,
+    pub timestamp: DateTime<Utc>,
+    pub reasoning: Option<String>,
+    pub take_profit: Option<f64>,
+    pub stop_loss: Option<f64>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PerformanceMetrics {
     pub total_trades: i64,
     pub winning_trades: i64,
@@ -63,6 +77,7 @@ pub struct DashboardData {
     pub performance_metrics: Option<PerformanceMetrics>,
     pub active_positions: Vec<Position>,
     pub recent_trades: Vec<Trade>,
+    pub trading_signals: Vec<TradingSignal>,
 }
 
 struct AppState {
@@ -82,6 +97,7 @@ async fn fetch_dashboard_data(state: &web::Data<AppState>) -> DashboardData {
         performance_metrics: None,
         active_positions: Vec::new(),
         recent_trades: Vec::new(),
+        trading_signals: Vec::new(),
     };
 
     // Fetch current Pyth price
@@ -103,6 +119,11 @@ async fn fetch_dashboard_data(state: &web::Data<AppState>) -> DashboardData {
     // Fetch recent trades
     if let Ok(trades) = fetch_trades(&state.client, &state.database_url).await {
         dashboard_data.recent_trades = trades;
+    }
+
+    // Fetch trading signals
+    if let Ok(signals) = fetch_trading_signals(&state.client, &state.database_url).await {
+        dashboard_data.trading_signals = signals;
     }
 
     dashboard_data
@@ -192,6 +213,23 @@ async fn fetch_trades(client: &reqwest::Client, database_url: &str) -> Result<Ve
         if let Some(trades_array) = api_response["data"].as_array() {
             if let Ok(trades) = serde_json::from_value::<Vec<Trade>>(serde_json::Value::Array(trades_array.clone())) {
                 return Ok(trades);
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
+async fn fetch_trading_signals(client: &reqwest::Client, database_url: &str) -> Result<Vec<TradingSignal>, reqwest::Error> {
+    let response = client
+        .get(&format!("{}/trading_signals/recent", database_url))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await?;
+    
+    if let Ok(api_response) = response.json::<serde_json::Value>().await {
+        if let Some(signals_array) = api_response["data"].as_array() {
+            if let Ok(signals) = serde_json::from_value::<Vec<TradingSignal>>(serde_json::Value::Array(signals_array.clone())) {
+                return Ok(signals);
             }
         }
     }
@@ -433,6 +471,42 @@ async fn index() -> Result<HttpResponse> {
             text-align: center;
             padding: 20px;
         }
+        
+        .trading-signals-container {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin-top: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .trading-signals-container h3 {
+            color: #fff;
+            margin-bottom: 15px;
+            font-size: 1.3rem;
+        }
+        
+        .trading-signal-item {
+            background: rgba(40, 40, 50, 0.8);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-left: 4px solid #4CAF50;
+            backdrop-filter: blur(5px);
+        }
+        
+        .trading-signal-item .signal-type {
+            font-weight: bold;
+            color: #4CAF50;
+            margin-bottom: 8px;
+        }
+        
+        .trading-signal-item .signal-details {
+            font-size: 0.9rem;
+            color: #b0b0b0;
+            line-height: 1.4;
+        }
     </style>
 </head>
 <body>
@@ -504,6 +578,11 @@ async fn index() -> Result<HttpResponse> {
             </div>
         </div>
         
+        <div class="trading-signals-container">
+            <h3>🎯 Trading Signals</h3>
+            <div id="trading-signals">Loading signals...</div>
+        </div>
+        
         <div style="text-align: center; margin-top: 30px;">
             <button class="refresh-btn" onclick="loadDashboard()">🔄 Refresh Data</button>
         </div>
@@ -521,6 +600,7 @@ async fn index() -> Result<HttpResponse> {
                 updatePnL(data.total_pnl, data.performance_metrics);
                 updatePositions(data.active_positions);
                 updateTrades(data.recent_trades);
+                updateTradingSignals(data.trading_signals);
                 
             } catch (error) {
                 console.error('Error loading dashboard:', error);
@@ -623,6 +703,27 @@ async fn index() -> Result<HttpResponse> {
                         Total: $${trade.total_value.toFixed(2)} | 
                         Status: ${trade.status}<br>
                         Time: ${new Date(trade.timestamp).toLocaleString()}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updateTradingSignals(signals) {
+            const container = document.getElementById('trading-signals');
+            if (signals.length === 0) {
+                container.innerHTML = '<div class="loading">No recent trading signals</div>';
+                return;
+            }
+            container.innerHTML = signals.map(signal => `
+                <div class="trading-signal-item">
+                    <div class="signal-type">${signal.signal_type.toUpperCase()}</div>
+                    <div class="signal-details">
+                        Confidence: ${signal.confidence.toFixed(2)}%<br>
+                        Price: $${signal.price.toFixed(4)}<br>
+                        Reasoning: ${signal.reasoning || 'N/A'}<br>
+                        Take Profit: ${signal.take_profit ? `$${signal.take_profit.toFixed(4)}` : 'N/A'}<br>
+                        Stop Loss: ${signal.stop_loss ? `$${signal.stop_loss.toFixed(4)}` : 'N/A'}<br>
+                        Time: ${new Date(signal.timestamp).toLocaleString()}
                     </div>
                 </div>
             `).join('');
