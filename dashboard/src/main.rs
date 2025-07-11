@@ -722,13 +722,15 @@ async fn index() -> Result<HttpResponse> {
                 let takeProfitPercent = 'N/A';
                 let stopLossPercent = 'N/A';
                 
-                if (signal.take_profit && signal.price) {
-                    const tpPercent = ((signal.take_profit - signal.price) / signal.price * 100).toFixed(2);
+                if (signal.take_profit !== null && signal.take_profit !== undefined) {
+                    // take_profit is stored as a percentage (e.g., 0.06 = 6%)
+                    const tpPercent = (signal.take_profit * 100).toFixed(2);
                     takeProfitPercent = `${tpPercent}%`;
                 }
                 
-                if (signal.stop_loss && signal.price) {
-                    const slPercent = ((signal.stop_loss - signal.price) / signal.price * 100).toFixed(2);
+                if (signal.stop_loss !== null && signal.stop_loss !== undefined) {
+                    // stop_loss is stored as a percentage (e.g., 0.035 = 3.5%)
+                    const slPercent = (signal.stop_loss * 100).toFixed(2);
                     stopLossPercent = `${slPercent}%`;
                 }
                 
