@@ -12,7 +12,7 @@ use crate::handlers::{
     create_wallet, get_prices, get_wallet_balances, health_check, store_balance, store_price,
     get_price_history, get_latest_price, get_technical_indicators,
     store_technical_indicators, get_latest_technical_indicators, store_trading_signal,
-    get_trading_signals, create_position, close_position, get_open_positions,
+    get_trading_signals, get_recent_trading_signals, create_position, close_position, get_open_positions,
     get_position_history, create_trading_config, get_trading_config,
     get_open_positions_by_pair, update_position_status,
     get_signals_count, get_active_positions_dashboard, get_recent_trades, get_performance_metrics,
@@ -66,6 +66,7 @@ async fn main() -> Result<()> {
         .route("/signals", post(store_trading_signal))
         .route("/signals/:pair", get(get_trading_signals))
         .route("/signals/:pair/count", get(get_signals_count))
+        .route("/trading_signals/recent", get(get_recent_trading_signals))
         .route("/positions", post(create_position))
         .route("/positions/close", post(close_position))
         .route("/positions/:address/open", get(get_open_positions))

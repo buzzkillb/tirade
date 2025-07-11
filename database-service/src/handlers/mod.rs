@@ -274,6 +274,24 @@ pub async fn get_trading_signals(
     }
 }
 
+pub async fn get_recent_trading_signals(
+    State(db): State<Arc<Database>>,
+    Query(query): Query<TradingSignalsQuery>,
+) -> std::result::Result<Json<ApiResponse<Vec<crate::models::TradingSignal>>>, StatusCode> {
+    let limit = query.limit.unwrap_or(5);
+    
+    match db.get_recent_trading_signals(limit).await {
+        Ok(signals) => {
+            info!("Retrieved {} recent trading signals", signals.len());
+            Ok(Json(ApiResponse::success(signals)))
+        }
+        Err(e) => {
+            warn!("Failed to get recent trading signals: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 pub async fn create_position(
     State(db): State<Arc<Database>>,
     Json(payload): Json<CreatePositionRequest>,

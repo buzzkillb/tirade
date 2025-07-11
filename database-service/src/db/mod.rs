@@ -678,6 +678,40 @@ impl Database {
         Ok(signals)
     }
 
+    pub async fn get_recent_trading_signals(&self, limit: i64) -> Result<Vec<crate::models::TradingSignal>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, pair, signal_type, confidence, price, timestamp,
+                   reasoning, take_profit, stop_loss, executed, created_at
+            FROM trading_signals
+            ORDER BY timestamp DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let signals: Vec<crate::models::TradingSignal> = rows
+            .into_iter()
+            .map(|row| crate::models::TradingSignal {
+                id: row.try_get("id").unwrap_or_default(),
+                pair: row.try_get("pair").unwrap_or_default(),
+                signal_type: row.try_get("signal_type").unwrap_or_default(),
+                confidence: row.try_get("confidence").unwrap_or_default(),
+                price: row.try_get("price").unwrap_or_default(),
+                timestamp: row.try_get("timestamp").unwrap_or_default(),
+                reasoning: row.try_get("reasoning").ok(),
+                take_profit: row.try_get("take_profit").ok(),
+                stop_loss: row.try_get("stop_loss").ok(),
+                executed: row.try_get("executed").unwrap_or_default(),
+                created_at: row.try_get("created_at").unwrap_or_default(),
+            })
+            .collect();
+
+        Ok(signals)
+    }
+
     // Positions methods
     pub async fn create_position(&self, request: &crate::models::CreatePositionRequest) -> Result<crate::models::Position> {
         let id = Uuid::new_v4().to_string();
