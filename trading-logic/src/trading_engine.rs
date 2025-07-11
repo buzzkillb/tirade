@@ -587,13 +587,23 @@ impl TradingEngine {
             info!("📉 Closed position at ${:.4} - PnL: {:.2}% (Duration: {}s)", 
                   price, pnl * 100.0, duration.num_seconds());
             
-            // Close position in database
-            if let Err(e) = self.close_position_in_database(price).await {
-                warn!("Failed to close position in database: {}", e);
+            // Close position in database - CRITICAL: Must succeed before clearing memory
+            match self.close_position_in_database(price).await {
+                Ok(_) => {
+                    info!("✅ Successfully closed position in database, clearing from memory");
+                    self.current_position = None;
+                }
+                Err(e) => {
+                    error!("❌ CRITICAL: Failed to close position in database: {}", e);
+                    error!("🚫 Keeping position in memory to prevent inconsistency");
+                    error!("🔄 Position will be retried on next cycle");
+                    return Err(anyhow!("Database close failed: {}", e));
+                }
             }
+        } else {
+            warn!("⚠️  Attempted to close position but no position in memory");
         }
         
-        self.current_position = None;
         Ok(())
     }
 
