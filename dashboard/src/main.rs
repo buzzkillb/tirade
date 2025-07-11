@@ -571,16 +571,16 @@ async fn index() -> Result<HttpResponse> {
             </div>
         </div>
         
+        <div class="trading-signals-container">
+            <h3>🎯 Trading Signals</h3>
+            <div id="trading-signals">Loading signals...</div>
+        </div>
+        
         <div class="grid">
             <div class="card trades-card">
                 <h2>💼 Recent Trades</h2>
                 <div id="recent-trades">Loading...</div>
             </div>
-        </div>
-        
-        <div class="trading-signals-container">
-            <h3>🎯 Trading Signals</h3>
-            <div id="trading-signals">Loading signals...</div>
         </div>
         
         <div style="text-align: center; margin-top: 30px;">
