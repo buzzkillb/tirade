@@ -60,6 +60,7 @@ pub struct PerformanceMetrics {
 pub struct DashboardData {
     pub current_price: Option<PriceData>,
     pub total_pnl: f64,
+    pub performance_metrics: Option<PerformanceMetrics>,
     pub active_positions: Vec<Position>,
     pub recent_trades: Vec<Trade>,
 }
@@ -78,6 +79,7 @@ async fn fetch_dashboard_data(state: &web::Data<AppState>) -> DashboardData {
     let mut dashboard_data = DashboardData {
         current_price: None,
         total_pnl: 0.0,
+        performance_metrics: None,
         active_positions: Vec::new(),
         recent_trades: Vec::new(),
     };
@@ -90,6 +92,7 @@ async fn fetch_dashboard_data(state: &web::Data<AppState>) -> DashboardData {
     // Fetch performance metrics for total PnL
     if let Ok(performance) = fetch_performance(&state.client, &state.database_url).await {
         dashboard_data.total_pnl = performance.total_pnl;
+        dashboard_data.performance_metrics = Some(performance);
     }
 
     // Fetch active positions
@@ -325,6 +328,39 @@ async fn index() -> Result<HttpResponse> {
             font-weight: bold;
         }
         
+        .pnl-stats {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex: 1;
+        }
+        
+        .stat-label {
+            font-size: 0.8rem;
+            color: rgba(255,255,255,0.7);
+            margin-bottom: 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .stat-value {
+            font-size: 1rem;
+            font-weight: bold;
+            color: white;
+        }
+        
         .trade-item {
             background: rgba(40, 40, 50, 0.8);
             border-radius: 8px;
@@ -406,7 +442,38 @@ async fn index() -> Result<HttpResponse> {
             <div class="card pnl-card">
                 <h2>📊 Total PnL</h2>
                 <div id="total-pnl" class="price-display">Loading...</div>
-                <div id="pnl-details">Loading details...</div>
+                <div id="pnl-stats" class="pnl-stats">
+                    <div class="stat-row">
+                        <div class="stat-item">
+                            <span class="stat-label">Trades:</span>
+                            <span id="total-trades" class="stat-value">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Win Rate:</span>
+                            <span id="win-rate" class="stat-value">-</span>
+                        </div>
+                    </div>
+                    <div class="stat-row">
+                        <div class="stat-item">
+                            <span class="stat-label">Avg PnL:</span>
+                            <span id="avg-pnl" class="stat-value">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Total %:</span>
+                            <span id="total-pnl-percent" class="stat-value">-</span>
+                        </div>
+                    </div>
+                    <div class="stat-row">
+                        <div class="stat-item">
+                            <span class="stat-label">Avg %:</span>
+                            <span id="avg-pnl-percent" class="stat-value">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Volume:</span>
+                            <span id="total-volume" class="stat-value">-</span>
+                        </div>
+                    </div>
+                </div>
             </div>
             
             <div class="card positions-card">
@@ -436,7 +503,7 @@ async fn index() -> Result<HttpResponse> {
                 const data = await response.json();
                 
                 updatePrice(data.current_price);
-                updatePnL(data.total_pnl);
+                updatePnL(data.total_pnl, data.performance_metrics);
                 updatePositions(data.active_positions);
                 updateTrades(data.recent_trades);
                 
@@ -459,17 +526,41 @@ async fn index() -> Result<HttpResponse> {
             }
         }
         
-        function updatePnL(totalPnl) {
+        function updatePnL(totalPnl, performanceMetrics) {
             const pnlDisplay = document.getElementById('total-pnl');
-            const pnlDetails = document.getElementById('pnl-details');
             
             const pnlClass = totalPnl >= 0 ? 'pnl-positive' : 'pnl-negative';
             const pnlSymbol = totalPnl >= 0 ? '+' : '';
             
             pnlDisplay.textContent = `${pnlSymbol}$${totalPnl.toFixed(2)}`;
             pnlDisplay.className = `price-display ${pnlClass}`;
-            pnlDetails.textContent = `Total PnL from all closed trades`;
-            pnlDetails.style.color = 'rgba(255,255,255,0.9)';
+            
+            // Update performance statistics
+            if (performanceMetrics) {
+                document.getElementById('total-trades').textContent = performanceMetrics.total_trades;
+                document.getElementById('win-rate').textContent = `${performanceMetrics.win_rate.toFixed(1)}%`;
+                document.getElementById('avg-pnl').textContent = `${performanceMetrics.avg_trade_pnl >= 0 ? '+' : ''}$${performanceMetrics.avg_trade_pnl.toFixed(2)}`;
+                document.getElementById('total-pnl-percent').textContent = `${performanceMetrics.total_pnl_percent >= 0 ? '+' : ''}${performanceMetrics.total_pnl_percent.toFixed(2)}%`;
+                document.getElementById('avg-pnl-percent').textContent = `${performanceMetrics.avg_trade_pnl >= 0 ? '+' : ''}${performanceMetrics.avg_trade_pnl.toFixed(2)}%`;
+                document.getElementById('total-volume').textContent = `$${performanceMetrics.total_volume.toFixed(0)}`;
+                
+                // Color code the values
+                const avgPnlElement = document.getElementById('avg-pnl');
+                const totalPnlPercentElement = document.getElementById('total-pnl-percent');
+                const avgPnlPercentElement = document.getElementById('avg-pnl-percent');
+                
+                avgPnlElement.className = `stat-value ${performanceMetrics.avg_trade_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}`;
+                totalPnlPercentElement.className = `stat-value ${performanceMetrics.total_pnl_percent >= 0 ? 'pnl-positive' : 'pnl-negative'}`;
+                avgPnlPercentElement.className = `stat-value ${performanceMetrics.avg_trade_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}`;
+            } else {
+                // Reset to defaults if no metrics available
+                document.getElementById('total-trades').textContent = '-';
+                document.getElementById('win-rate').textContent = '-';
+                document.getElementById('avg-pnl').textContent = '-';
+                document.getElementById('total-pnl-percent').textContent = '-';
+                document.getElementById('avg-pnl-percent').textContent = '-';
+                document.getElementById('total-volume').textContent = '-';
+            }
         }
         
         function updatePositions(positions) {
