@@ -714,19 +714,38 @@ async fn index() -> Result<HttpResponse> {
                 container.innerHTML = '<div class="loading">No recent trading signals</div>';
                 return;
             }
-            container.innerHTML = signals.map(signal => `
-                <div class="trading-signal-item">
-                    <div class="signal-type">${signal.signal_type.toUpperCase()}</div>
-                    <div class="signal-details">
-                        Confidence: ${signal.confidence.toFixed(2)}%<br>
-                        Price: $${signal.price.toFixed(4)}<br>
-                        Reasoning: ${signal.reasoning || 'N/A'}<br>
-                        Take Profit: ${signal.take_profit ? `$${signal.take_profit.toFixed(4)}` : 'N/A'}<br>
-                        Stop Loss: ${signal.stop_loss ? `$${signal.stop_loss.toFixed(4)}` : 'N/A'}<br>
-                        Time: ${new Date(signal.timestamp).toLocaleString()}
+            container.innerHTML = signals.map(signal => {
+                // Convert confidence from decimal to percentage
+                const confidencePercent = (signal.confidence * 100).toFixed(1);
+                
+                // Calculate take profit and stop loss percentages
+                let takeProfitPercent = 'N/A';
+                let stopLossPercent = 'N/A';
+                
+                if (signal.take_profit && signal.price) {
+                    const tpPercent = ((signal.take_profit - signal.price) / signal.price * 100).toFixed(2);
+                    takeProfitPercent = `${tpPercent}%`;
+                }
+                
+                if (signal.stop_loss && signal.price) {
+                    const slPercent = ((signal.stop_loss - signal.price) / signal.price * 100).toFixed(2);
+                    stopLossPercent = `${slPercent}%`;
+                }
+                
+                return `
+                    <div class="trading-signal-item">
+                        <div class="signal-type">${signal.signal_type.toUpperCase()}</div>
+                        <div class="signal-details">
+                            Confidence: ${confidencePercent}%<br>
+                            Price: $${signal.price.toFixed(4)}<br>
+                            Reasoning: ${signal.reasoning || 'N/A'}<br>
+                            Take Profit: ${takeProfitPercent}<br>
+                            Stop Loss: ${stopLossPercent}<br>
+                            Time: ${new Date(signal.timestamp).toLocaleString()}
+                        </div>
                     </div>
-                </div>
-            `).join('');
+                `;
+            }).join('');
         }
         
         // Start price updates every 1 second
