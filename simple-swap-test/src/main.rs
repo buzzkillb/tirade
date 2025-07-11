@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
     
     // Step 5: Store buy position to database
     info!("💾 Storing buy position to database...");
-    let buy_position_result = store_position_to_database(&database_url, &wallet_address, 154.64, test_amount_usdc, "long").await?;
+    let buy_position_result = store_position_to_database(&database_url, &wallet_address, 154.64, sol_received, "long").await?;
     if !buy_position_result {
         error!("❌ Failed to store buy position to database");
         return Err(anyhow!("Failed to store buy position"));
@@ -121,7 +121,7 @@ async fn main() -> Result<()> {
     
     // Step 8: Store sell position to database
     info!("💾 Storing sell position to database...");
-    let sell_position_result = store_position_to_database(&database_url, &wallet_address, 154.64, sol_received, "short").await?;
+    let sell_position_result = store_position_to_database(&database_url, &wallet_address, 154.64, usdc_received, "short").await?;
     if !sell_position_result {
         error!("❌ Failed to store sell position to database");
         return Err(anyhow!("Failed to store sell position"));

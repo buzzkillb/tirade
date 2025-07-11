@@ -370,30 +370,35 @@ impl TradingExecutor {
         info!("🔍 Parsing transaction output for SOL/USDC changes...");
         
         for line in output.lines() {
-            info!("🔍 Parsing line: '{}'", line.trim());
+            let trimmed_line = line.trim();
+            info!("🔍 Parsing line: '{}'", trimmed_line);
             
-            if line.contains("Transaction Signature:") || line.contains("Signature:") {
-                signature = line.split(':').nth(1).map(|s| s.trim().to_string());
+            if trimmed_line.contains("Transaction Signature:") || trimmed_line.contains("Signature:") {
+                signature = trimmed_line.split(':').nth(1).map(|s| s.trim().to_string());
                 info!("📝 Found signature: {:?}", signature);
-            } else if line.contains("SOL:") && line.contains("(received)") {
-                // Look for pattern like "  SOL: 0.123456 SOL (received)"
-                if let Some(change_str) = line.split("SOL:").nth(1) {
-                    if let Some(num_str) = change_str.split("SOL").next() {
-                        let parsed = num_str.trim().parse::<f64>();
+            } else if trimmed_line.contains("SOL:") && trimmed_line.contains("(received)") {
+                // Look for pattern like "SOL: 0.123456 SOL (received)"
+                if let Some(change_str) = trimmed_line.split("SOL:").nth(1) {
+                    // Extract the number before "SOL"
+                    let parts: Vec<&str> = change_str.split_whitespace().collect();
+                    if let Some(num_str) = parts.first() {
+                        let parsed = num_str.parse::<f64>();
                         sol_change = parsed.ok();
-                        info!("🟢 Found SOL change: {:?} (parsed from '{}')", sol_change, num_str.trim());
+                        info!("🟢 Found SOL change: {:?} (parsed from '{}')", sol_change, num_str);
                     }
                 }
-            } else if line.contains("USDC:") && (line.contains("(spent)") || line.contains("(received)")) {
-                // Look for pattern like "  USDC: 100.00 USDC (spent)"
-                if let Some(change_str) = line.split("USDC:").nth(1) {
-                    if let Some(num_str) = change_str.split("USDC").next() {
-                        let mut change = num_str.trim().parse::<f64>().unwrap_or(0.0);
-                        if line.contains("(spent)") {
+            } else if trimmed_line.contains("USDC:") && (trimmed_line.contains("(spent)") || trimmed_line.contains("(received)")) {
+                // Look for pattern like "USDC: 100.00 USDC (spent)"
+                if let Some(change_str) = trimmed_line.split("USDC:").nth(1) {
+                    // Extract the number before "USDC"
+                    let parts: Vec<&str> = change_str.split_whitespace().collect();
+                    if let Some(num_str) = parts.first() {
+                        let mut change = num_str.parse::<f64>().unwrap_or(0.0);
+                        if trimmed_line.contains("(spent)") {
                             change = -change; // Make spent amounts negative
                         }
                         usdc_change = Some(change);
-                        info!("🟢 Found USDC change: {:?} (parsed from '{}')", usdc_change, num_str.trim());
+                        info!("🟢 Found USDC change: {:?} (parsed from '{}')", usdc_change, num_str);
                     }
                 }
             }
@@ -433,18 +438,23 @@ impl TradingExecutor {
             let mut usdc_balance = 0.0;
             
             for line in stdout.lines() {
-                if line.contains("SOL:") && line.contains("SOL") {
-                    // Look for lines like "  SOL: 1.234567 SOL"
-                    if let Some(balance_part) = line.split("SOL:").nth(1) {
-                        if let Some(number_part) = balance_part.split("SOL").next() {
-                            sol_balance = number_part.trim().parse::<f64>().unwrap_or(0.0);
+                let trimmed_line = line.trim();
+                if trimmed_line.contains("SOL:") && trimmed_line.contains("SOL") {
+                    // Look for lines like "SOL: 1.234567 SOL"
+                    if let Some(balance_part) = trimmed_line.split("SOL:").nth(1) {
+                        // Extract the number before "SOL"
+                        let parts: Vec<&str> = balance_part.split_whitespace().collect();
+                        if let Some(number_part) = parts.first() {
+                            sol_balance = number_part.parse::<f64>().unwrap_or(0.0);
                         }
                     }
-                } else if line.contains("USDC:") && line.contains("USDC") {
-                    // Look for lines like "  USDC: 100.00 USDC"  
-                    if let Some(balance_part) = line.split("USDC:").nth(1) {
-                        if let Some(number_part) = balance_part.split("USDC").next() {
-                            usdc_balance = number_part.trim().parse::<f64>().unwrap_or(0.0);
+                } else if trimmed_line.contains("USDC:") && trimmed_line.contains("USDC") {
+                    // Look for lines like "USDC: 100.00 USDC"  
+                    if let Some(balance_part) = trimmed_line.split("USDC:").nth(1) {
+                        // Extract the number before "USDC"
+                        let parts: Vec<&str> = balance_part.split_whitespace().collect();
+                        if let Some(number_part) = parts.first() {
+                            usdc_balance = number_part.parse::<f64>().unwrap_or(0.0);
                         }
                     }
                 }
