@@ -387,40 +387,25 @@ impl TradingEngine {
                             let actual_quantity = quantity.unwrap_or(1.0); // Default to 1.0 if no quantity available
                             self.open_position(signal.price, PositionType::Long, actual_quantity).await?;
                             
-                            // Post position to database - CRITICAL: Must succeed
-                            if let Some(position) = &self.current_position {
-                                match self.post_position(position, signal.take_profit, signal.stop_loss).await {
-                                    Ok(_) => {
-                                        info!("");
-                                        info!("🟢 BUY SIGNAL EXECUTED");
-                                        info!("═══════════════════════════════════════════════════════════════");
-                                        info!("  💰 Entry Price: ${:.4}", signal.price);
-                                        info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
-                                        info!("  📊 Position Type: Long");
-                                        info!("  🎯 Dynamic Take Profit: {:.2}%", signal.take_profit * 100.0);
-                                        info!("  🛑 Dynamic Stop Loss: {:.2}%", signal.stop_loss * 100.0);
-                                        info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
-                                        info!("═══════════════════════════════════════════════════════════════");
-                                        info!("");
-                                    }
-                                    Err(e) => {
-                                        error!("❌ CRITICAL: Transaction succeeded but database logging failed: {}", e);
-                                        error!("🚫 Rolling back position in memory to prevent inconsistency");
-                                        // Roll back the position in memory since database logging failed
-                                        self.current_position = None;
-                                        return Err(anyhow!("Database logging failed after successful transaction: {}", e));
-                                    }
-                                }
-                            } else {
-                                error!("❌ CRITICAL: Position opened in memory but position is None");
-                                return Err(anyhow!("Position opened but position is None"));
-                            }
+                            info!("");
+                            info!("🟢 BUY SIGNAL EXECUTED");
+                            info!("═══════════════════════════════════════════════════════════════");
+                            info!("  💰 Entry Price: ${:.4}", signal.price);
+                            info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
+                            info!("  📊 Position Type: Long");
+                            info!("  🎯 Dynamic Take Profit: {:.2}%", signal.take_profit * 100.0);
+                            info!("  🛑 Dynamic Stop Loss: {:.2}%", signal.stop_loss * 100.0);
+                            info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
+                            info!("═══════════════════════════════════════════════════════════════");
+                            info!("");
                         }
                         Ok((false, _)) => {
                             warn!("⚠️  BUY signal execution failed or was skipped");
                         }
                         Err(e) => {
                             error!("❌ BUY signal execution error: {}", e);
+                            // Don't create a position if the transaction failed
+                            // The position creation is now handled in open_position
                         }
                     }
                 } else {
@@ -543,6 +528,24 @@ impl TradingEngine {
             return Err(anyhow!("Cannot open position - one already exists"));
         }
         
+        // Additional safety check: Check if there's already an open position in the database
+        match self.fetch_open_positions().await {
+            Ok(Some(existing_position)) => {
+                warn!("🚫 Database already has an open position: {:?} at ${:.4}", 
+                      existing_position.position_type, existing_position.entry_price);
+                warn!("🔄 Recovering existing position instead of creating new one");
+                self.current_position = Some(existing_position);
+                return Ok(());
+            }
+            Ok(None) => {
+                // No existing position, proceed with creation
+            }
+            Err(e) => {
+                warn!("⚠️ Failed to check for existing positions: {}", e);
+                // Continue anyway, but log the warning
+            }
+        }
+        
         let log_type = position_type.clone();
         let position = Position {
             position_id: None,
@@ -552,19 +555,29 @@ impl TradingEngine {
             position_type,
         };
         
-        // Post position to database and get the position ID
-        let position_id = self.post_position(&position, 0.05, 0.03).await?;
+        // Set the position in memory FIRST to prevent race conditions
+        self.current_position = Some(position.clone());
         
-        // Update the position with the ID from database
-        let mut final_position = position;
-        final_position.position_id = Some(position_id.clone());
-        
-        self.current_position = Some(final_position);
-        
-        info!("📈 Opened {:?} position at ${:.4} with quantity {:.6}", log_type, price, quantity);
-        info!("🔒 Position safety check passed - no duplicate positions");
-        info!("🆔 Database position ID: {}", position_id.clone());
-        Ok(())
+        // Now post position to database and get the position ID
+        match self.post_position(&position, 0.05, 0.03).await {
+            Ok(position_id) => {
+                // Update the position with the ID from database
+                if let Some(mut final_position) = &mut self.current_position {
+                    final_position.position_id = Some(position_id.clone());
+                }
+                
+                info!("📈 Opened {:?} position at ${:.4} with quantity {:.6}", log_type, price, quantity);
+                info!("🔒 Position safety check passed - no duplicate positions");
+                info!("🆔 Database position ID: {}", position_id);
+                Ok(())
+            }
+            Err(e) => {
+                // If database posting fails, roll back the in-memory position
+                error!("❌ Failed to post position to database: {}", e);
+                self.current_position = None;
+                Err(anyhow!("Database posting failed: {}", e))
+            }
+        }
     }
 
     async fn close_position(&mut self, price: f64) -> Result<()> {
