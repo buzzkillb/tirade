@@ -108,6 +108,15 @@ if ! cargo build --quiet; then
 fi
 cd ..
 
+# Build logging service
+print_status "Building logging service..."
+cd logging-service
+if ! cargo build --quiet; then
+    print_error "Failed to build logging service"
+    exit 1
+fi
+cd ..
+
 print_success "All binaries built successfully"
 
 # Function to check if a screen session exists
@@ -206,6 +215,14 @@ print_status "Starting trading logic..."
 start_service_in_screen "Trading Logic" "tirade-trading" "trading-logic" \
     "TRANSACTION_BINARY_PATH=\"../solana-trading-bot/target/debug/transaction\" cargo run" "N/A"
 
+# Start logging service
+print_status "Starting logging service..."
+start_service_in_screen "Logging Service" "tirade-logs" "logging-service" \
+    "cargo run" "8083"
+
+# Wait for logging service
+wait_for_service "Logging Service" "http://localhost:8083"
+
 # Start dashboard
 print_status "Starting dashboard..."
 start_service_in_screen "Dashboard" "tirade-dashboard" "dashboard" \
@@ -219,6 +236,7 @@ cat > logs/screen_sessions.txt << EOF
 Database Service: tirade-db
 Price Feed: tirade-price
 Trading Logic: tirade-trading
+Logging Service: tirade-logs
 Dashboard: tirade-dashboard
 EOF
 
@@ -229,12 +247,14 @@ echo ""
 echo "📊 Dashboard: http://localhost:3000"
 echo "🗄️  Database API: http://localhost:8080"
 echo "📡 Price Feed: Running on port 8081"
+echo "📋 Logging Service: http://localhost:8083"
 echo "🧠 Trading Logic: Running and analyzing markets"
 echo ""
 echo "📺 Screen Sessions:"
 echo "   - Database: tirade-db"
 echo "   - Price Feed: tirade-price"
 echo "   - Trading Logic: tirade-trading"
+echo "   - Logging Service: tirade-logs"
 echo "   - Dashboard: tirade-dashboard"
 echo ""
 echo "🛠️  Screen Commands:"

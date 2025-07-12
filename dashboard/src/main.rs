@@ -586,6 +586,18 @@ async fn index() -> Result<HttpResponse> {
         <div style="text-align: center; margin-top: 30px;">
             <button class="refresh-btn" onclick="loadDashboard()">🔄 Refresh Data</button>
         </div>
+        
+        <!-- Log Streaming Section -->
+        <div class="card" style="margin-top: 30px; background: rgba(20, 20, 30, 0.95);">
+            <h2>📋 Live Logs (Last 5 Minutes)</h2>
+            <div id="log-container" style="height: 400px; overflow-y: auto; background: rgba(0, 0, 0, 0.3); border-radius: 8px; padding: 15px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.4;">
+                <div style="color: #888;">Connecting to log stream...</div>
+            </div>
+            <div style="margin-top: 10px; text-align: center;">
+                <button class="refresh-btn" onclick="clearLogs()" style="margin-right: 10px;">🗑️ Clear Logs</button>
+                <button class="refresh-btn" onclick="toggleLogStream()" id="toggle-log-btn">⏸️ Pause Stream</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -758,6 +770,112 @@ async fn index() -> Result<HttpResponse> {
         
         // Initialize dashboard
         startPriceUpdates();
+        
+        // Log streaming functionality
+        let logStream = null;
+        let isLogStreamActive = true;
+        let logContainer = document.getElementById('log-container');
+        
+        function connectToLogStream() {
+            if (logStream) {
+                logStream.close();
+            }
+            
+            try {
+                logStream = new WebSocket('ws://localhost:8083/logs/stream');
+                
+                logStream.onopen = function() {
+                    console.log('Connected to log stream');
+                    logContainer.innerHTML = '<div style="color: #4ade80;">✅ Connected to log stream</div>';
+                };
+                
+                logStream.onmessage = function(event) {
+                    const log = JSON.parse(event.data);
+                    appendLog(log);
+                };
+                
+                logStream.onclose = function() {
+                    console.log('Log stream disconnected');
+                    if (isLogStreamActive) {
+                        setTimeout(connectToLogStream, 5000); // Reconnect after 5 seconds
+                    }
+                };
+                
+                logStream.onerror = function(error) {
+                    console.error('Log stream error:', error);
+                    logContainer.innerHTML += '<div style="color: #f87171;">❌ Log stream error</div>';
+                };
+                
+            } catch (error) {
+                console.error('Failed to connect to log stream:', error);
+                logContainer.innerHTML = '<div style="color: #f87171;">❌ Failed to connect to log stream</div>';
+            }
+        }
+        
+        function appendLog(log) {
+            const timestamp = new Date(log.timestamp).toLocaleTimeString();
+            const level = log.level.toUpperCase();
+            const service = log.service;
+            const message = log.message;
+            
+            let levelColor = '#888';
+            switch (level) {
+                case 'ERROR': levelColor = '#f87171'; break;
+                case 'WARN': levelColor = '#fbbf24'; break;
+                case 'INFO': levelColor = '#4ade80'; break;
+                case 'DEBUG': levelColor = '#60a5fa'; break;
+            }
+            
+            const logEntry = document.createElement('div');
+            logEntry.style.marginBottom = '8px';
+            logEntry.style.borderBottom = '1px solid rgba(255,255,255,0.1)';
+            logEntry.style.paddingBottom = '8px';
+            
+            logEntry.innerHTML = `
+                <span style="color: #888; font-size: 11px;">[${timestamp}]</span>
+                <span style="color: ${levelColor}; font-weight: bold; margin-left: 8px;">[${level}]</span>
+                <span style="color: #60a5fa; margin-left: 8px;">[${service}]</span>
+                <span style="color: #e0e0e0; margin-left: 8px;">${message}</span>
+                ${log.filtered ? '<span style="color: #fbbf24; margin-left: 8px;">[FILTERED]</span>' : ''}
+            `;
+            
+            logContainer.appendChild(logEntry);
+            
+            // Auto-scroll to bottom
+            logContainer.scrollTop = logContainer.scrollHeight;
+            
+            // Keep only last 1000 log entries to prevent memory bloat
+            const logEntries = logContainer.children;
+            if (logEntries.length > 1000) {
+                logContainer.removeChild(logEntries[0]);
+            }
+        }
+        
+        function clearLogs() {
+            logContainer.innerHTML = '<div style="color: #888;">Logs cleared</div>';
+        }
+        
+        function toggleLogStream() {
+            const toggleBtn = document.getElementById('toggle-log-btn');
+            
+            if (isLogStreamActive) {
+                // Pause stream
+                isLogStreamActive = false;
+                if (logStream) {
+                    logStream.close();
+                }
+                toggleBtn.textContent = '▶️ Resume Stream';
+                logContainer.innerHTML += '<div style="color: #fbbf24;">⏸️ Log stream paused</div>';
+            } else {
+                // Resume stream
+                isLogStreamActive = true;
+                connectToLogStream();
+                toggleBtn.textContent = '⏸️ Pause Stream';
+            }
+        }
+        
+        // Initialize log streaming
+        connectToLogStream();
     </script>
 </body>
 </html>
