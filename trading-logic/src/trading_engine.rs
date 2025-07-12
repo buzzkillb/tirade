@@ -557,13 +557,13 @@ impl TradingEngine {
         
         // Update the position with the ID from database
         let mut final_position = position;
-        final_position.position_id = Some(position_id);
+        final_position.position_id = Some(position_id.clone());
         
         self.current_position = Some(final_position);
         
         info!("📈 Opened {:?} position at ${:.4} with quantity {:.6}", log_type, price, quantity);
         info!("🔒 Position safety check passed - no duplicate positions");
-        info!("🆔 Database position ID: {}", position_id);
+        info!("🆔 Database position ID: {}", position_id.clone());
         Ok(())
     }
 
@@ -1291,7 +1291,7 @@ impl TradingEngine {
             Ok(crate::models::ApiResponse { success: true, data: Some(Some(position_db)), .. }) => {
                 info!("✅ Successfully found open position in database");
                 let position = Position {
-                    position_id: position_db.id.clone(),
+                    position_id: Some(position_db.id.clone()),
                     entry_price: position_db.entry_price,
                     entry_time: position_db.entry_time,
                     quantity: position_db.quantity,
@@ -1569,13 +1569,6 @@ impl TradingEngine {
             }
         } else {
             return Err(anyhow!("Invalid position data format in response"));
-        }
-    }
-
-    fn calculate_pnl(&self, current_price: f64, position: &Position) -> f64 {
-        match position.position_type {
-            PositionType::Long => (current_price - position.entry_price) / position.entry_price,
-            PositionType::Short => (position.entry_price - current_price) / position.entry_price,
         }
     }
 
