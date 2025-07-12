@@ -562,7 +562,7 @@ impl TradingEngine {
         match self.post_position(&position, 0.05, 0.03).await {
             Ok(position_id) => {
                 // Update the position with the ID from database
-                if let Some(mut final_position) = &mut self.current_position {
+                if let Some(ref mut final_position) = &mut self.current_position {
                     final_position.position_id = Some(position_id.clone());
                 }
                 
