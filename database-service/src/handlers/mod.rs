@@ -12,7 +12,7 @@ use axum::{
 };
 use serde::Deserialize;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{info, warn, error};
 use serde_json::Value;
 
 #[derive(Debug, Deserialize)]
@@ -313,17 +313,23 @@ pub async fn close_position(
     State(db): State<Arc<Database>>,
     Json(payload): Json<ClosePositionRequest>,
 ) -> std::result::Result<Json<ApiResponse<crate::models::Position>>, StatusCode> {
+    info!("🔴 Closing position: ID={}, Exit Price=${:.4}", payload.position_id, payload.exit_price);
+    
     match db.close_position(&payload).await {
         Ok(position) => {
             if let (Some(pnl), Some(pnl_percent)) = (position.pnl, position.pnl_percent) {
                 let emoji = if pnl > 0.0 { "💰" } else if pnl < 0.0 { "💸" } else { "➡️" };
-                info!("Closed position: {} {} at ${:.4} (PnL: {} ${:.2}, {:.2}%)", 
+                info!("✅ Closed position: {} {} at ${:.4} (PnL: {} ${:.2}, {:.2}%)", 
                       position.position_type, position.pair, position.exit_price.unwrap_or(0.0),
                       emoji, pnl, pnl_percent);
+            } else {
+                info!("✅ Closed position: {} {} at ${:.4}", 
+                      position.position_type, position.pair, position.exit_price.unwrap_or(0.0));
             }
             Ok(Json(ApiResponse::success(position)))
         }
         Err(e) => {
+            error!("❌ Failed to close position {}: {}", payload.position_id, e);
             warn!("Failed to close position: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }

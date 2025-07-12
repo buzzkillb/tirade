@@ -2,7 +2,7 @@ use crate::error::{DatabaseServiceError, Result};
 use crate::models::{BalanceSnapshot, PriceFeed, Wallet};
 use chrono::{DateTime, Utc};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool, Row};
-use tracing::info;
+use tracing::{info, error, warn};
 use uuid::Uuid;
 
 pub struct Database {
@@ -767,21 +767,61 @@ impl Database {
 
     pub async fn close_position(&self, request: &crate::models::ClosePositionRequest) -> Result<crate::models::Position> {
         let now = Utc::now();
+        
+        info!("🔍 Looking up position: {}", request.position_id);
 
         // Get the position
-        let position = sqlx::query(
+        let position = match sqlx::query(
             r#"
             SELECT * FROM positions WHERE id = ?
             "#,
         )
         .bind(&request.position_id)
         .fetch_one(&self.pool)
-        .await?;
+        .await {
+            Ok(pos) => pos,
+            Err(sqlx::Error::RowNotFound) => {
+                error!("❌ Position not found: {}", request.position_id);
+                return Err(DatabaseServiceError::NotFound(format!("Position {} not found", request.position_id)));
+            }
+            Err(e) => {
+                error!("❌ Database error looking up position {}: {}", request.position_id, e);
+                return Err(DatabaseServiceError::Database(e));
+            }
+        };
 
         let entry_time: DateTime<Utc> = position.try_get("entry_time")?;
         let entry_price: f64 = position.try_get("entry_price")?;
         let quantity: f64 = position.try_get("quantity")?;
         let position_type: String = position.try_get("position_type")?;
+        let status: String = position.try_get("status")?;
+        
+        // Check if position is already closed
+        if status == "closed" {
+            warn!("⚠️ Position {} is already closed", request.position_id);
+            // Return the existing closed position
+            return Ok(crate::models::Position {
+                id: position.try_get("id")?,
+                wallet_id: position.try_get("wallet_id")?,
+                pair: position.try_get("pair")?,
+                position_type: position.try_get("position_type")?,
+                entry_price: position.try_get("entry_price")?,
+                entry_time: position.try_get("entry_time")?,
+                quantity: position.try_get("quantity")?,
+                status: position.try_get("status")?,
+                exit_price: position.try_get("exit_price")?,
+                exit_time: position.try_get("exit_time")?,
+                pnl: position.try_get("pnl")?,
+                pnl_percent: position.try_get("pnl_percent")?,
+                duration_seconds: position.try_get("duration_seconds")?,
+                created_at: position.try_get("created_at")?,
+                updated_at: position.try_get("updated_at")?,
+                current_price: Some(position.try_get("exit_price").unwrap_or_else(|_| position.try_get("entry_price").unwrap_or(0.0))),
+            });
+        }
+
+        info!("📊 Closing position: {} {} at ${:.4} -> ${:.4}", 
+              position_type, request.position_id, entry_price, request.exit_price);
 
         // Calculate PnL
         let pnl = if position_type == "long" {
@@ -798,7 +838,10 @@ impl Database {
         };
         let duration_seconds = (now - entry_time).num_seconds();
 
-        sqlx::query(
+        info!("💰 PnL: ${:.2} ({:.2}%) | Duration: {}s", pnl, pnl_percent, duration_seconds);
+
+        // Update position status
+        match sqlx::query(
             r#"
             UPDATE positions
             SET status = 'closed', exit_price = ?, exit_time = ?, pnl = ?, pnl_percent = ?,
@@ -814,11 +857,17 @@ impl Database {
         .bind(&now)
         .bind(&request.position_id)
         .execute(&self.pool)
-        .await?;
+        .await {
+            Ok(_) => info!("✅ Position status updated successfully"),
+            Err(e) => {
+                error!("❌ Failed to update position status: {}", e);
+                return Err(DatabaseServiceError::Database(e));
+            }
+        }
 
         // Create trade record
         let trade_id = Uuid::new_v4().to_string();
-        sqlx::query(
+        match sqlx::query(
             r#"
             INSERT INTO trades (
                 id, position_id, trade_type, price, quantity, timestamp,
@@ -837,17 +886,31 @@ impl Database {
         .bind(request.fees)
         .bind(&now)
         .execute(&self.pool)
-        .await?;
+        .await {
+            Ok(_) => info!("✅ Trade record created successfully"),
+            Err(e) => {
+                error!("❌ Failed to create trade record: {}", e);
+                return Err(DatabaseServiceError::Database(e));
+            }
+        }
 
         // Return updated position
-        let updated_position = sqlx::query(
+        let updated_position = match sqlx::query(
             r#"
             SELECT * FROM positions WHERE id = ?
             "#,
         )
         .bind(&request.position_id)
         .fetch_one(&self.pool)
-        .await?;
+        .await {
+            Ok(pos) => pos,
+            Err(e) => {
+                error!("❌ Failed to fetch updated position: {}", e);
+                return Err(DatabaseServiceError::Database(e));
+            }
+        };
+
+        info!("✅ Position {} closed successfully", request.position_id);
 
         Ok(crate::models::Position {
             id: updated_position.try_get("id")?,

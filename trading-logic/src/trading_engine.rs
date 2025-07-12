@@ -21,6 +21,7 @@ pub struct TradingEngine {
 
 #[derive(Debug, Clone)]
 struct Position {
+    position_id: Option<String>, // Store the database position ID to avoid GET request
     entry_price: f64,
     entry_time: chrono::DateTime<Utc>,
     quantity: f64,
@@ -543,15 +544,26 @@ impl TradingEngine {
         }
         
         let log_type = position_type.clone();
-        self.current_position = Some(Position {
+        let position = Position {
+            position_id: None,
             entry_price: price,
             entry_time: Utc::now(),
             quantity, // Use the actual quantity received from the transaction
             position_type,
-        });
+        };
+        
+        // Post position to database and get the position ID
+        let position_id = self.post_position(&position, 0.05, 0.03).await?;
+        
+        // Update the position with the ID from database
+        let mut final_position = position;
+        final_position.position_id = Some(position_id);
+        
+        self.current_position = Some(final_position);
         
         info!("📈 Opened {:?} position at ${:.4} with quantity {:.6}", log_type, price, quantity);
         info!("🔒 Position safety check passed - no duplicate positions");
+        info!("🆔 Database position ID: {}", position_id);
         Ok(())
     }
 
@@ -658,7 +670,7 @@ impl TradingEngine {
         info!("📈 Multi-Timeframe Technical Indicators:");
         
         // Short-term indicators (30 minutes)
-        let short_term_prices = self.get_recent_prices(prices, 30 * 60);
+        let short_term_prices = self.get_recent_prices(&prices, 30 * 60);
         if short_term_prices.len() >= 20 {
             let short_indicators = self.strategy.calculate_custom_indicators(&short_term_prices);
             info!("  ⚡ Short-term (30m):");
@@ -709,7 +721,7 @@ impl TradingEngine {
         // Current timeframe indicators (from database)
         info!("  📊 Current timeframe:");
         if let Some(rsi) = indicators.rsi_14 {
-            let rsi_status = if rsi > 70.0 { "🔴 Overbought" } else if rsi < 30.0 { "🟢 Oversold" } else { "🟡 Neutral" };
+            let rsi_status = if rsi > 70.0 { "🔴 Overbought" } else if rsi < 30.0 { "�� Oversold" } else { "🟡 Neutral" };
             info!("    📊 RSI (14): {:.2} {}", rsi, rsi_status);
         }
         if let Some(sma_20) = indicators.sma_20 {
@@ -1048,7 +1060,7 @@ impl TradingEngine {
         Ok(())
     }
 
-    async fn post_position(&self, position: &Position, take_profit: f64, stop_loss: f64) -> Result<()> {
+    async fn post_position(&self, position: &Position, take_profit: f64, stop_loss: f64) -> Result<String> {
         // Get wallet address from Solana private key
         let wallet_address = self.trading_executor.get_wallet_address()?;
 
@@ -1058,6 +1070,7 @@ impl TradingEngine {
         });
         let wallet_url = format!("{}/wallets", self.config.database_url);
         let wallet_response = self.client.post(&wallet_url)
+            .timeout(Duration::from_secs(10))
             .json(&create_wallet_request)
             .send()
             .await?;
@@ -1081,6 +1094,7 @@ impl TradingEngine {
         let url = format!("{}/positions", self.config.database_url);
         
         let response = self.client.post(&url)
+            .timeout(Duration::from_secs(15))
             .json(&create_position_request)
             .send()
             .await?;
@@ -1095,9 +1109,25 @@ impl TradingEngine {
             let response_text = response.text().await.unwrap_or_else(|_| "No response body".to_string());
             info!("✅ Successfully posted position to database: {:?} at ${:.4}", position.position_type, position.entry_price);
             debug!("📊 Database response: {}", response_text);
+            
+            // Parse the response to get the position ID
+            match serde_json::from_str::<serde_json::Value>(&response_text) {
+                Ok(json_response) => {
+                    if let Some(data) = json_response.get("data") {
+                        if let Some(position_id) = data.get("id").and_then(|id| id.as_str()) {
+                            info!("🆔 Captured position ID: {}", position_id);
+                            return Ok(position_id.to_string());
+                        }
+                    }
+                    warn!("⚠️ Could not extract position ID from response");
+                    Ok("".to_string()) // Return empty string if we can't get the ID
+                }
+                Err(e) => {
+                    warn!("⚠️ Failed to parse position response: {}", e);
+                    Ok("".to_string()) // Return empty string if parsing fails
+                }
+            }
         }
-        
-        Ok(())
     }
 
     async fn post_trade(&self, entry_price: f64, exit_price: f64, entry_time: DateTime<Utc>, 
@@ -1261,6 +1291,7 @@ impl TradingEngine {
             Ok(crate::models::ApiResponse { success: true, data: Some(Some(position_db)), .. }) => {
                 info!("✅ Successfully found open position in database");
                 let position = Position {
+                    position_id: position_db.id.clone(),
                     entry_price: position_db.entry_price,
                     entry_time: position_db.entry_time,
                     quantity: position_db.quantity,
@@ -1361,6 +1392,67 @@ impl TradingEngine {
     async fn close_position_in_database(&self, exit_price: f64) -> Result<()> {
         use urlencoding::encode;
         use serde_json::json;
+        use std::time::Duration as StdDuration;
+        
+        // Try to use cached position ID first (most efficient)
+        if let Some(position) = &self.current_position {
+            if let Some(position_id) = &position.position_id {
+                if !position_id.is_empty() {
+                    info!("🆔 Using cached position ID: {}", position_id);
+                    return self.close_position_with_id(position_id, exit_price).await;
+                }
+            }
+        }
+        
+        // Fallback: Get position from database (less efficient but reliable)
+        info!("🔍 No cached position ID, fetching from database...");
+        return self.close_position_with_fallback(exit_price).await;
+    }
+    
+    async fn close_position_with_id(&self, position_id: &str, exit_price: f64) -> Result<()> {
+        use serde_json::json;
+        
+        // Quick health check before attempting to close
+        if !self.check_database_health().await? {
+            warn!("⚠️ Database health check failed, but proceeding with close attempt");
+        }
+        
+        let close_request = json!({
+            "position_id": position_id,
+            "exit_price": exit_price,
+            "transaction_hash": None::<String>,
+            "fees": None::<f64>,
+        });
+        
+        let close_url = format!("{}/positions/close", self.config.database_url);
+        
+        info!("🔗 Closing position with ID: {}", position_id);
+        info!("📤 Close request: {}", serde_json::to_string_pretty(&close_request)?);
+        
+        // Retry logic with exponential backoff
+        for attempt in 1..=3 {
+            match self.attempt_close_position_request(&close_url, &close_request).await {
+                Ok(_) => {
+                    info!("✅ Successfully closed position {} in database at price: {}", position_id, exit_price);
+                    return Ok(());
+                }
+                Err(e) => {
+                    if attempt == 3 {
+                        error!("❌ Failed to close position after 3 attempts: {}", e);
+                        return Err(e);
+                    }
+                    let delay_ms = 100 * attempt; // 100ms, 200ms, 300ms
+                    warn!("⚠️ Close attempt {} failed, retrying in {}ms: {}", attempt, delay_ms, e);
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+            }
+        }
+        
+        Err(anyhow!("Failed to close position after all retry attempts"))
+    }
+    
+    async fn close_position_with_fallback(&self, exit_price: f64) -> Result<()> {
+        use urlencoding::encode;
         
         // First, get the open position from the database to get its ID
         let wallet_address = self.trading_executor.get_wallet_address()?;
@@ -1373,65 +1465,118 @@ impl TradingEngine {
         info!("  🔗 Encoded pair: {}", encoded_pair);
         info!("  💰 Exit price: ${:.4}", exit_price);
         
-        let response = self.client.get(&url).send().await?;
-        info!("  📡 Response status: {}", response.status());
+        // Retry logic for GET request
+        for attempt in 1..=3 {
+            match self.attempt_get_position_request(&url).await {
+                Ok(Some(position_id)) => {
+                    info!("✅ Found position ID: {}", position_id);
+                    return self.close_position_with_id(&position_id, exit_price).await;
+                }
+                Ok(None) => {
+                    warn!("❌ No open position found to close");
+                    return Ok(()); // No position to close is not an error
+                }
+                Err(e) => {
+                    if attempt == 3 {
+                        error!("❌ Failed to get position after 3 attempts: {}", e);
+                        return Err(e);
+                    }
+                    let delay_ms = 100 * attempt;
+                    warn!("⚠️ Get position attempt {} failed, retrying in {}ms: {}", attempt, delay_ms, e);
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+            }
+        }
+        
+        Err(anyhow!("Failed to get position after all retry attempts"))
+    }
+    
+    async fn attempt_close_position_request(&self, url: &str, request: &serde_json::Value) -> Result<()> {
+        let start_time = std::time::Instant::now();
+        
+        let response = self.client.post(url)
+            .timeout(Duration::from_secs(15))
+            .json(request)
+            .send()
+            .await?;
+            
+        let duration = start_time.elapsed();
+        info!("📡 Close response status: {} (took {:?})", response.status(), duration);
         
         if !response.status().is_success() {
-            warn!("❌ Failed to get open position: {}", response.status());
-            return Ok(());
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            let error_msg = format!("Failed to close position in database: {} - {}", status, text);
+            
+            // Log detailed error information for debugging
+            error!("❌ Database close failed:");
+            error!("  Status: {}", status);
+            error!("  URL: {}", url);
+            error!("  Request: {}", serde_json::to_string_pretty(request)?);
+            error!("  Response: {}", text);
+            error!("  Duration: {:?}", duration);
+            
+            return Err(anyhow!(error_msg));
+        } else {
+            let response_text = response.text().await.unwrap_or_default();
+            info!("📊 Close response: {}", response_text);
+            info!("✅ Database close successful in {:?}", duration);
+            Ok(())
+        }
+    }
+    
+    async fn attempt_get_position_request(&self, url: &str) -> Result<Option<String>> {
+        let start_time = std::time::Instant::now();
+        
+        let response = self.client.get(url)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await?;
+            
+        let duration = start_time.elapsed();
+        info!("📡 Get position response status: {} (took {:?})", response.status(), duration);
+        
+        if !response.status().is_success() {
+            let error_msg = format!("Failed to get open position: {}", response.status());
+            
+            // Log detailed error information for debugging
+            error!("❌ Database get position failed:");
+            error!("  Status: {}", response.status());
+            error!("  URL: {}", url);
+            error!("  Duration: {:?}", duration);
+            
+            return Err(anyhow!(error_msg));
         }
         
         let api_response: serde_json::Value = response.json().await?;
-        info!("  📊 API Response: {}", serde_json::to_string_pretty(&api_response)?);
+        info!("📊 API Response: {}", serde_json::to_string_pretty(&api_response)?);
         
         // Check if data is null (no position found)
         if api_response["data"].is_null() {
-            warn!("❌ No open position found to close");
-            return Ok(());
+            info!("💤 No open position found (data is null)");
+            return Ok(None);
         }
         
         if let Some(position_data) = api_response["data"].as_object() {
-            info!("  ✅ Found position data: {}", serde_json::to_string_pretty(position_data)?);
+            info!("✅ Found position data: {}", serde_json::to_string_pretty(position_data)?);
             
             if let Some(position_id) = position_data["id"].as_str() {
-                info!("  🆔 Position ID: {}", position_id);
-                
-                // Now close the position using the correct ID
-                let close_request = json!({
-                    "position_id": position_id,
-                    "exit_price": exit_price,
-                    "transaction_hash": None::<String>,
-                    "fees": None::<f64>,
-                });
-                
-                let close_url = format!("{}/positions/close", self.config.database_url);
-                info!("  🔗 Close URL: {}", close_url);
-                info!("  📤 Close request: {}", serde_json::to_string_pretty(&close_request)?);
-                
-                let close_response = self.client.post(&close_url)
-                    .json(&close_request)
-                    .send()
-                    .await?;
-                    
-                info!("  📡 Close response status: {}", close_response.status());
-                
-                if !close_response.status().is_success() {
-                    let status = close_response.status();
-                    let text = close_response.text().await.unwrap_or_default();
-                    warn!("❌ Failed to close position in database: {} - {}", status, text);
-                } else {
-                    let response_text = close_response.text().await.unwrap_or_default();
-                    info!("✅ Successfully closed position {} in database at price: {}", position_id, exit_price);
-                    info!("  📊 Close response: {}", response_text);
-                }
+                info!("🆔 Position ID: {}", position_id);
+                info!("✅ Database get position successful in {:?}", duration);
+                return Ok(Some(position_id.to_string()));
             } else {
-                warn!("❌ No position ID found in response");
+                return Err(anyhow!("No position ID found in response"));
             }
         } else {
-            warn!("❌ Invalid position data format in response");
+            return Err(anyhow!("Invalid position data format in response"));
         }
-        
-        Ok(())
+    }
+
+    fn calculate_pnl(&self, current_price: f64, position: &Position) -> f64 {
+        match position.position_type {
+            PositionType::Long => (current_price - position.entry_price) / position.entry_price,
+            PositionType::Short => (position.entry_price - current_price) / position.entry_price,
+        }
     }
 
     // Helper functions for enhanced analysis
@@ -1611,5 +1756,28 @@ impl TradingEngine {
         }
         
         Ok(false)
+    }
+
+    async fn check_database_health(&self) -> Result<bool> {
+        let health_url = format!("{}/health", self.config.database_url);
+        
+        match self.client.get(&health_url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    debug!("✅ Database health check passed");
+                    Ok(true)
+                } else {
+                    warn!("⚠️ Database health check failed: {}", response.status());
+                    Ok(false)
+                }
+            }
+            Err(e) => {
+                warn!("⚠️ Database health check error: {}", e);
+                Ok(false)
+            }
+        }
     }
 } 

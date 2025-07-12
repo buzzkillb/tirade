@@ -39,9 +39,18 @@ async fn main() -> Result<()> {
     // Load configuration
     let config = Config::from_env()?;
     
+    info!("🚀 Starting Database Service...");
+    info!("═══════════════════════════════════════════════════════════════");
+    info!("  🌐 Port: {}", config.port);
+    info!("  💾 Database URL: {}", config.database_url);
+    info!("  🔗 Max Connections: {}", config.max_connections);
+    info!("═══════════════════════════════════════════════════════════════");
+    
     // Initialize database
     let db = Database::new(&config.database_url, config.max_connections).await?;
     db.init_schema().await?;
+    
+    info!("✅ Database initialized successfully");
     
     // Create app state
     let state = Arc::new(db);
@@ -87,9 +96,11 @@ async fn main() -> Result<()> {
     // Start server
     let addr = format!("0.0.0.0:{}", config.port);
     
-    info!("Starting database service on {}", addr);
+    info!("🌐 Starting database service on {}", addr);
     
     let listener = tokio::net::TcpListener::bind(&addr).await?;
+    info!("✅ Database service listening on {}", addr);
+    
     axum::serve(listener, app).await?;
     
     Ok(())

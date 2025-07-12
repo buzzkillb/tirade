@@ -19,7 +19,7 @@ impl Config {
             .map_err(|_| DatabaseServiceError::Config("Invalid PORT".to_string()))?;
             
         let max_connections = env::var("MAX_CONNECTIONS")
-            .unwrap_or_else(|_| "5".to_string())
+            .unwrap_or_else(|_| "20".to_string())  // Increased from 5 to 20
             .parse::<u32>()
             .map_err(|_| DatabaseServiceError::Config("Invalid MAX_CONNECTIONS".to_string()))?;
 
