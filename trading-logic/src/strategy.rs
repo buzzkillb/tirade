@@ -1,7 +1,9 @@
-use crate::models::{TradingSignal, SignalType, TradingIndicators, PriceFeed};
+use crate::models::{TradingSignal, SignalType, TradingIndicators, PriceFeed, BollingerBands, MACD, ExponentialSmoothing};
 use crate::config::Config;
 use chrono::{DateTime, Utc};
 use tracing::info;
+
+// Removed local struct definitions for BollingerBands, MACD, ExponentialSmoothing
 
 pub struct TradingStrategy {
     config: Config,
@@ -12,8 +14,6 @@ pub struct TradingStrategy {
 pub struct DynamicThresholds {
     pub rsi_oversold: f64,
     pub rsi_overbought: f64,
-    pub take_profit: f64,
-    pub stop_loss: f64,
     pub momentum_threshold: f64,
     pub volatility_multiplier: f64,
     pub market_regime: MarketRegime,
@@ -78,58 +78,27 @@ impl TradingStrategy {
         let (market_regime, trend_strength) = self.analyze_market_regime(prices, indicators);
         let (support_level, resistance_level) = self.calculate_support_resistance(prices);
         
-        // Calculate realistic targets based on historical data
-        let (realistic_take_profit, realistic_stop_loss) = self.calculate_realistic_targets(prices);
-        
-        // Base thresholds (adaptive based on market regime) - INCREASED for better profitability
-        let (base_rsi_oversold, base_rsi_overbought, base_take_profit, base_stop_loss, base_momentum_threshold) = 
+        // Base thresholds (adaptive based on market regime)
+        let (base_rsi_oversold, base_rsi_overbought, base_momentum_threshold) = 
             match market_regime {
-                MarketRegime::Trending => (30.0, 70.0, 0.06, 0.035, 0.003), // Higher take profit, wider stop loss
-                MarketRegime::Ranging => (35.0, 65.0, 0.04, 0.025, 0.004), // Increased take profit, wider stop loss
-                MarketRegime::Volatile => (25.0, 75.0, 0.07, 0.04, 0.006),  // Higher take profit, wider stop loss
-                MarketRegime::Consolidating => (40.0, 60.0, 0.035, 0.02, 0.002), // Increased take profit, wider stop loss
+                MarketRegime::Trending => (30.0, 70.0, 0.003),
+                MarketRegime::Ranging => (35.0, 65.0, 0.004),
+                MarketRegime::Volatile => (25.0, 75.0, 0.006),
+                MarketRegime::Consolidating => (40.0, 60.0, 0.002),
             };
         
-        // Use realistic targets instead of fixed percentages for consolidating markets
-        let (take_profit, stop_loss) = if market_regime == MarketRegime::Consolidating {
-            (realistic_take_profit, realistic_stop_loss)
-        } else {
-            // Adjust based on volatility and trend strength
-            let volatility_multiplier = if volatility > 0.05 {
-                1.3 + (trend_strength * 0.2) // Higher multiplier in strong trends
-            } else if volatility < 0.01 {
-                0.8 - (trend_strength * 0.1) // Lower multiplier in weak trends
-            } else {
-                1.0 + (trend_strength * 0.1) // Normal with trend adjustment
-            };
-            
-            (base_take_profit * volatility_multiplier, base_stop_loss * volatility_multiplier)
-        };
-        
-        // Adjust based on volatility and trend strength
-        let volatility_multiplier = if volatility > 0.05 {
-            1.3 + (trend_strength * 0.2) // Higher multiplier in strong trends
-        } else if volatility < 0.01 {
-            0.8 - (trend_strength * 0.1) // Lower multiplier in weak trends
-        } else {
-            1.0 + (trend_strength * 0.1) // Normal with trend adjustment
-        };
-        
-        // Adjust RSI thresholds based on market regime and volatility
-        let rsi_oversold = base_rsi_oversold + (volatility * 100.0 * 0.5) - (trend_strength * 5.0);
-        let rsi_overbought = base_rsi_overbought - (volatility * 100.0 * 0.5) + (trend_strength * 5.0);
-        
-        // Adjust momentum threshold based on market conditions
+        // Adjust thresholds based on volatility
+        let volatility_multiplier = (volatility / 0.02).max(0.5).min(2.0);
+        let rsi_oversold = base_rsi_oversold * (1.0 + (1.0 - volatility_multiplier) * 0.1);
+        let rsi_overbought = base_rsi_overbought * (1.0 + (volatility_multiplier - 1.0) * 0.1);
         let momentum_threshold = base_momentum_threshold * volatility_multiplier;
         
-        info!("📊 Dynamic Thresholds - Regime: {:?}, Trend Strength: {:.2}, Volatility: {:.3}%, RSI Oversold: {:.1}, RSI Overbought: {:.1}, Take Profit: {:.2}%, Stop Loss: {:.2}%", 
-              market_regime, trend_strength, volatility * 100.0, rsi_oversold, rsi_overbought, take_profit * 100.0, stop_loss * 100.0);
+        info!("🎯 Dynamic Thresholds - Regime: {:?}, Trend Strength: {:.2}, Volatility: {:.2}%, RSI: {:.1}-{:.1}, Momentum: {:.3}",
+              market_regime, trend_strength, volatility * 100.0, rsi_oversold, rsi_overbought, momentum_threshold);
         
         DynamicThresholds {
             rsi_oversold,
             rsi_overbought,
-            take_profit,
-            stop_loss,
             momentum_threshold,
             volatility_multiplier,
             market_regime,
@@ -137,64 +106,6 @@ impl TradingStrategy {
             support_level,
             resistance_level,
         }
-    }
-
-    // Calculate realistic profit targets based on historical data
-    fn calculate_realistic_targets(&self, prices: &[PriceFeed]) -> (f64, f64) {
-        if prices.len() < 24 {
-            // Fallback to conservative targets if not enough data
-            return (0.015, 0.008); // 1.5% take profit, 0.8% stop loss
-        }
-        
-        // Calculate hourly volatility over last 24 hours
-        let hourly_volatility = self.calculate_hourly_volatility(prices);
-        
-        // Calculate average hourly price movement
-        let hourly_moves = self.calculate_hourly_moves(prices);
-        let avg_hourly_move = hourly_moves.iter().sum::<f64>() / hourly_moves.len() as f64;
-        
-        // Take profit = 50% of average hourly move, but minimum 0.5%
-        let take_profit = (avg_hourly_move * 0.5).max(0.005);
-        
-        // Stop loss = 30% of average hourly move, but minimum 0.3%
-        let stop_loss = (avg_hourly_move * 0.3).max(0.003);
-        
-        info!("📈 Realistic Targets - Avg Hourly Move: {:.3}%, Take Profit: {:.3}%, Stop Loss: {:.3}%", 
-              avg_hourly_move * 100.0, take_profit * 100.0, stop_loss * 100.0);
-        
-        (take_profit, stop_loss)
-    }
-    
-    // Calculate hourly volatility
-    fn calculate_hourly_volatility(&self, prices: &[PriceFeed]) -> f64 {
-        if prices.len() < 24 {
-            return 0.02; // Default 2% volatility
-        }
-        
-        let mut hourly_returns = Vec::new();
-        for i in 1..prices.len() {
-            let current = prices[i].price;
-            let previous = prices[i-1].price;
-            let return_rate = (current - previous) / previous;
-            hourly_returns.push(return_rate.abs());
-        }
-        
-        let avg_return = hourly_returns.iter().sum::<f64>() / hourly_returns.len() as f64;
-        avg_return
-    }
-    
-    // Calculate hourly price movements
-    fn calculate_hourly_moves(&self, prices: &[PriceFeed]) -> Vec<f64> {
-        let mut moves = Vec::new();
-        
-        for i in 1..prices.len() {
-            let current = prices[i].price;
-            let previous = prices[i-1].price;
-            let move_pct = (current - previous) / previous;
-            moves.push(move_pct.abs());
-        }
-        
-        moves
     }
     
     // Detect momentum decay for early exit
@@ -222,7 +133,6 @@ impl TradingStrategy {
     }
 
     pub fn calculate_custom_indicators(&self, prices: &[PriceFeed]) -> TradingIndicators {
-        // Check if we have enough data for the longest indicator (SMA50 = 50 points)
         if prices.len() < self.config.sma_long_period {
             return TradingIndicators {
                 rsi_fast: None,
@@ -232,26 +142,22 @@ impl TradingStrategy {
                 volatility: None,
                 price_momentum: None,
                 price_change_percent: 0.0,
+                bollinger_bands: None,
+                macd: None,
+                exponential_smoothing: None,
+                stochastic: None,
+                rsi_divergence: None,
+                confluence_score: None,
             };
         }
 
         let price_values: Vec<f64> = prices.iter().map(|p| p.price).collect();
-        
-        // Calculate RSI for different periods
         let rsi_fast = self.calculate_rsi(&price_values, self.config.rsi_fast_period);
         let rsi_slow = self.calculate_rsi(&price_values, self.config.rsi_slow_period);
-        
-        // Calculate SMAs
         let sma_short = self.calculate_sma(&price_values, self.config.sma_short_period);
         let sma_long = self.calculate_sma(&price_values, self.config.sma_long_period);
-        
-        // Calculate volatility
         let volatility = self.calculate_volatility(&price_values, self.config.volatility_window);
-        
-        // Calculate price momentum (rate of change)
         let price_momentum = self.calculate_price_momentum(&price_values);
-        
-        // Calculate price change percentage
         let price_change_percent = if prices.len() >= 2 {
             let current = prices[prices.len() - 1].price;
             let previous = prices[prices.len() - 2].price;
@@ -259,6 +165,14 @@ impl TradingStrategy {
         } else {
             0.0
         };
+        let bollinger_bands = self.calculate_bollinger_bands(&price_values, 20, 2.0);
+        let macd = self.calculate_macd(&price_values, 12, 26, 9);
+        let exponential_smoothing = self.calculate_exponential_smoothing(&price_values);
+        let stochastic = self.calculate_stochastic(&price_values, 14, 3);
+        let rsi_divergence = self.calculate_rsi_divergence(&price_values, 14);
+        let confluence_score = self.calculate_confluence_score(
+            &rsi_fast, &bollinger_bands, &macd, &stochastic, &rsi_divergence
+        );
 
         TradingIndicators {
             rsi_fast,
@@ -268,6 +182,12 @@ impl TradingStrategy {
             volatility,
             price_momentum,
             price_change_percent,
+            bollinger_bands,
+            macd,
+            exponential_smoothing,
+            stochastic,
+            rsi_divergence,
+            confluence_score,
         }
     }
 
@@ -276,8 +196,8 @@ impl TradingStrategy {
         current_price: f64,
         timestamp: DateTime<Utc>,
         short_term_indicators: &TradingIndicators,
-        medium_term_indicators: &TradingIndicators,
-        long_term_indicators: &TradingIndicators,
+        _medium_term_indicators: &TradingIndicators,
+        _long_term_indicators: &TradingIndicators,
         _db_indicators: &crate::models::TechnicalIndicators,
         dynamic_thresholds: &DynamicThresholds,
     ) -> TradingSignal {
@@ -285,12 +205,40 @@ impl TradingStrategy {
         let mut reasoning = Vec::new();
         let mut signal_type = SignalType::Hold;
 
-        // Debug: Log the indicator values for different timeframes
-        info!("🔍 Strategy Debug - Short-term RSI: {:?}, Medium-term RSI: {:?}, Long-term RSI: {:?}", 
-              short_term_indicators.rsi_fast, medium_term_indicators.rsi_fast, long_term_indicators.rsi_fast);
-        info!("🔍 Strategy Debug - Short-term SMA: {:?}, Medium-term SMA: {:?}, Long-term SMA: {:?}", 
-              short_term_indicators.sma_short, medium_term_indicators.sma_short, long_term_indicators.sma_short);
+        // === Option 2: Only RSI and Moving Average Trend ===
+        // 1. RSI Overbought/Oversold
+        if let Some(rsi_fast) = short_term_indicators.rsi_fast {
+            if rsi_fast > dynamic_thresholds.rsi_overbought {
+                signal_type = SignalType::Sell;
+                confidence += 0.5;
+                reasoning.push(format!("RSI overbought: RSI ({:.2}) > {:.1}", rsi_fast, dynamic_thresholds.rsi_overbought));
+            } else if rsi_fast < dynamic_thresholds.rsi_oversold {
+                signal_type = SignalType::Buy;
+                confidence += 0.5;
+                reasoning.push(format!("RSI oversold: RSI ({:.2}) < {:.1}", rsi_fast, dynamic_thresholds.rsi_oversold));
+            }
+        }
 
+        // 2. Moving Average Trend (only if not already set by RSI)
+        if let (Some(sma_short), Some(rsi_fast)) = (short_term_indicators.sma_short, short_term_indicators.rsi_fast) {
+            if signal_type == SignalType::Hold {
+                // Uptrend: Price above SMA and RSI neutral (40-60)
+                if current_price > sma_short && rsi_fast >= 40.0 && rsi_fast <= 60.0 {
+                    signal_type = SignalType::Buy;
+                    confidence += 0.3;
+                    reasoning.push(format!("MA trend: Price (${:.4}) above SMA (${:.4}), RSI ({:.2}) neutral (40-60)", current_price, sma_short, rsi_fast));
+                }
+                // Downtrend: Price below SMA and RSI neutral (40-60)
+                else if current_price < sma_short && rsi_fast >= 40.0 && rsi_fast <= 60.0 {
+                    signal_type = SignalType::Sell;
+                    confidence += 0.3;
+                    reasoning.push(format!("MA trend: Price (${:.4}) below SMA (${:.4}), RSI ({:.2}) neutral (40-60)", current_price, sma_short, rsi_fast));
+                }
+            }
+        }
+
+        // === All other strategies are commented out for Option 2 simplification ===
+        /*
         // Strategy 1: RSI Divergence Signal (with dynamic thresholds)
         if let (Some(rsi_fast), Some(rsi_slow)) = (short_term_indicators.rsi_fast, short_term_indicators.rsi_slow) {
             // Buy signal: Fast RSI crosses above slow RSI from oversold
@@ -381,21 +329,6 @@ impl TradingStrategy {
             }
         }
 
-        // Strategy 5: Simple RSI Overbought/Oversold (should trigger more easily)
-        if let Some(rsi_fast) = short_term_indicators.rsi_fast {
-            if rsi_fast > dynamic_thresholds.rsi_overbought && signal_type == SignalType::Hold {
-                signal_type = SignalType::Sell;
-                confidence += 0.35;
-                reasoning.push(format!("RSI overbought: RSI ({:.2}) > {:.1}", 
-                                     rsi_fast, dynamic_thresholds.rsi_overbought));
-            } else if rsi_fast < dynamic_thresholds.rsi_oversold && signal_type == SignalType::Hold {
-                signal_type = SignalType::Buy;
-                confidence += 0.35;
-                reasoning.push(format!("RSI oversold: RSI ({:.2}) < {:.1}", 
-                                     rsi_fast, dynamic_thresholds.rsi_oversold));
-            }
-        }
-
         // Strategy 5.5: Profit Taking with Momentum Weakening (NEW)
         if let Some(rsi_fast) = short_term_indicators.rsi_fast {
             // Sell when RSI is approaching overbought (60-70) and momentum is weakening
@@ -431,9 +364,6 @@ impl TradingStrategy {
             
             // Bullish trend: Price above SMA and RSI in bullish territory
             if current_price > sma_short && rsi_fast >= 40.0 && rsi_fast <= 70.0 {
-                info!("[Trend Debug] Bullish: price {:.4} > SMA {:.4}, RSI {:.2}, Regime: {:?}", 
-                      current_price, sma_short, rsi_fast, dynamic_thresholds.market_regime);
-                
                 let adjusted_confidence = base_confidence * (1.0 + dynamic_thresholds.trend_strength);
                 
                 if signal_type == SignalType::Buy {
@@ -446,110 +376,156 @@ impl TradingStrategy {
                                      current_price, sma_short, rsi_fast, dynamic_thresholds.market_regime, dynamic_thresholds.trend_strength));
             }
             
-            // Bearish trend: Price below SMA and RSI in bearish territory
+            // FIXED: Price below SMA should generate BUY signal (buying the dip)
             if current_price < sma_short && rsi_fast >= 30.0 && rsi_fast <= 60.0 {
-                info!("[Trend Debug] Bearish: price {:.4} < SMA {:.4}, RSI {:.2}, Regime: {:?}", 
-                      current_price, sma_short, rsi_fast, dynamic_thresholds.market_regime);
-                
                 let adjusted_confidence = base_confidence * (1.0 + dynamic_thresholds.trend_strength);
                 
-                if signal_type == SignalType::Sell {
+                if signal_type == SignalType::Buy {
                     confidence += adjusted_confidence;
                 } else {
-                    signal_type = SignalType::Sell;
+                    signal_type = SignalType::Buy; // FIXED: BUY instead of SELL
                     confidence += adjusted_confidence;
                 }
-                reasoning.push(format!("Enhanced trend following: Price (${:.4}) below SMA (${:.4}), RSI ({:.2}) in bearish range, Regime: {:?}, Trend Strength: {:.2}", 
+                reasoning.push(format!("Enhanced trend following: Price (${:.4}) below SMA (${:.4}), RSI ({:.2}) in bearish range - BUYING THE DIP, Regime: {:?}, Trend Strength: {:.2}", 
                                      current_price, sma_short, rsi_fast, dynamic_thresholds.market_regime, dynamic_thresholds.trend_strength));
             }
         }
 
         // Strategy 8: Support/Resistance Breakout
         if let (Some(support), Some(resistance)) = (dynamic_thresholds.support_level, dynamic_thresholds.resistance_level) {
-            let breakout_threshold = 0.002; // 0.2% breakout threshold
+            let support_distance = (current_price - support) / current_price;
+            let resistance_distance = (resistance - current_price) / current_price;
             
             // Breakout above resistance
-            if current_price > resistance * (1.0 + breakout_threshold) && signal_type == SignalType::Hold {
+            if current_price > resistance * 1.005 && signal_type == SignalType::Hold {
                 signal_type = SignalType::Buy;
-                confidence += 0.30;
-                reasoning.push(format!("Resistance breakout: Price (${:.4}) above resistance (${:.4})", 
-                                     current_price, resistance));
+                confidence += 0.3;
+                reasoning.push(format!("Resistance breakout: Price (${:.4}) above resistance (${:.4})", current_price, resistance));
             }
             
             // Breakdown below support
-            if current_price < support * (1.0 - breakout_threshold) && signal_type == SignalType::Hold {
+            if current_price < support * 0.995 && signal_type == SignalType::Hold {
                 signal_type = SignalType::Sell;
-                confidence += 0.30;
-                reasoning.push(format!("Support breakdown: Price (${:.4}) below support (${:.4})", 
-                                     current_price, support));
+                confidence += 0.3;
+                reasoning.push(format!("Support breakdown: Price (${:.4}) below support (${:.4})", current_price, support));
             }
         }
 
-        // Strategy 8.5: Trend Reversal Profit Taking (NEW)
-        if let (Some(sma_short), Some(rsi_fast)) = (short_term_indicators.sma_short, short_term_indicators.rsi_fast) {
-            // Sell when price is above SMA but momentum is weakening and RSI is high
-            if current_price > sma_short && rsi_fast > 55.0 && 
-               short_term_indicators.price_momentum.unwrap_or(0.0) < -dynamic_thresholds.momentum_threshold && 
-               signal_type == SignalType::Hold {
-                signal_type = SignalType::Sell;
-                confidence += 0.20;
-                reasoning.push(format!("Trend reversal profit taking: Price above SMA but momentum weakening, RSI {:.2}", rsi_fast));
-            }
-        }
-
-        // Strategy 9: Mean Reversion at Support/Resistance
-        if let (Some(support), Some(resistance)) = (dynamic_thresholds.support_level, dynamic_thresholds.resistance_level) {
-            let mean_reversion_threshold = 0.005; // 0.5% from level
-            
-            // Bounce from support
-            if current_price > support && current_price < support * (1.0 + mean_reversion_threshold) && 
-               short_term_indicators.price_change_percent > 0.0 && signal_type == SignalType::Hold {
-                signal_type = SignalType::Buy;
-                confidence += 0.25;
-                reasoning.push(format!("Support bounce: Price (${:.4}) near support (${:.4}) with positive momentum", 
-                                     current_price, support));
-            }
-            
-            // Rejection from resistance
-            if current_price < resistance && current_price > resistance * (1.0 - mean_reversion_threshold) && 
-               short_term_indicators.price_change_percent < 0.0 && signal_type == SignalType::Hold {
-                signal_type = SignalType::Sell;
-                confidence += 0.25;
-                reasoning.push(format!("Resistance rejection: Price (${:.4}) near resistance (${:.4}) with negative momentum", 
-                                     current_price, resistance));
-            }
-        }
-
-        // Strategy 10: Multi-timeframe Trend Alignment
-        if let (Some(short_sma), Some(medium_sma), Some(long_sma)) = 
-            (short_term_indicators.sma_short, medium_term_indicators.sma_short, long_term_indicators.sma_short) {
-            
-            // All timeframes showing bullish alignment
-            if current_price > short_sma && short_sma > medium_sma && medium_sma > long_sma {
+        // Strategy 9: Bollinger Bands Analysis (NEW)
+        if let Some(bollinger) = &short_term_indicators.bollinger_bands {
+            // Oversold with bullish momentum
+            if bollinger.percent_b < 0.2 && short_term_indicators.price_momentum.unwrap_or(0.0) > 0.0 {
                 if signal_type == SignalType::Buy {
-                    confidence += 0.20;
+                    confidence += 0.25;
                 } else {
                     signal_type = SignalType::Buy;
-                    confidence += 0.20;
+                    confidence += 0.25;
                 }
-                reasoning.push(format!("Multi-timeframe bullish alignment: Price > Short SMA ({:.4}) > Medium SMA ({:.4}) > Long SMA ({:.4})", 
-                                     short_sma, medium_sma, long_sma));
+                reasoning.push(format!("Bollinger oversold: %B ({:.2}) < 0.2 with bullish momentum", bollinger.percent_b));
             }
             
-            // All timeframes showing bearish alignment
-            if current_price < short_sma && short_sma < medium_sma && medium_sma < long_sma {
+            // Overbought with bearish momentum
+            if bollinger.percent_b > 0.8 && short_term_indicators.price_momentum.unwrap_or(0.0) < 0.0 {
                 if signal_type == SignalType::Sell {
-                    confidence += 0.20;
+                    confidence += 0.25;
                 } else {
                     signal_type = SignalType::Sell;
-                    confidence += 0.20;
+                    confidence += 0.25;
                 }
-                reasoning.push(format!("Multi-timeframe bearish alignment: Price < Short SMA ({:.4}) < Medium SMA ({:.4}) < Long SMA ({:.4})", 
-                                     short_sma, medium_sma, long_sma));
+                reasoning.push(format!("Bollinger overbought: %B ({:.2}) > 0.8 with bearish momentum", bollinger.percent_b));
             }
         }
 
-        // Strategy 11: RSI Divergence Across Timeframes
+        // Strategy 10: MACD Analysis (NEW)
+        if let Some(macd) = &short_term_indicators.macd {
+            // Bullish crossover
+            if macd.bullish_crossover && signal_type == SignalType::Hold {
+                signal_type = SignalType::Buy;
+                confidence += 0.3;
+                reasoning.push(format!("MACD bullish crossover: MACD ({:.4}) > Signal ({:.4})", macd.macd_line, macd.signal_line));
+            }
+            
+            // Bearish crossover
+            if macd.bearish_crossover && signal_type == SignalType::Hold {
+                signal_type = SignalType::Sell;
+                confidence += 0.3;
+                reasoning.push(format!("MACD bearish crossover: MACD ({:.4}) < Signal ({:.4})", macd.macd_line, macd.signal_line));
+            }
+            
+            // MACD histogram momentum
+            if macd.histogram > 0.0 && macd.histogram > macd.signal_line * 0.1 && signal_type == SignalType::Buy {
+                confidence += 0.15;
+                reasoning.push(format!("MACD momentum: Histogram ({:.4}) showing strong bullish momentum", macd.histogram));
+            } else if macd.histogram < 0.0 && macd.histogram < macd.signal_line * -0.1 && signal_type == SignalType::Sell {
+                confidence += 0.15;
+                reasoning.push(format!("MACD momentum: Histogram ({:.4}) showing strong bearish momentum", macd.histogram));
+            }
+        }
+
+        // Strategy 11: EMA Analysis (NEW)
+        if let Some(ema) = &short_term_indicators.exponential_smoothing {
+            // Strong uptrend: EMA12 > EMA26 > EMA50
+            if ema.ema_12 > ema.ema_26 && ema.ema_26 > ema.ema_50 && current_price > ema.ema_12 {
+                if signal_type == SignalType::Buy {
+                    confidence += 0.2;
+                } else {
+                    signal_type = SignalType::Buy;
+                    confidence += 0.2;
+                }
+                reasoning.push(format!("EMA strong uptrend: EMA12 ({:.4}) > EMA26 ({:.4}) > EMA50 ({:.4})", ema.ema_12, ema.ema_26, ema.ema_50));
+            }
+            
+            // Strong downtrend: EMA12 < EMA26 < EMA50
+            if ema.ema_12 < ema.ema_26 && ema.ema_26 < ema.ema_50 && current_price < ema.ema_12 {
+                if signal_type == SignalType::Sell {
+                    confidence += 0.2;
+                } else {
+                    signal_type = SignalType::Sell;
+                    confidence += 0.2;
+                }
+                reasoning.push(format!("EMA strong downtrend: EMA12 ({:.4}) < EMA26 ({:.4}) < EMA50 ({:.4})", ema.ema_12, ema.ema_26, ema.ema_50));
+            }
+        }
+
+        // Strategy 12: Stochastic Oscillator Analysis (NEW)
+        if let Some(stochastic) = &short_term_indicators.stochastic {
+            // Oversold with bullish crossover
+            if stochastic.oversold && stochastic.k > stochastic.d && signal_type == SignalType::Hold {
+                signal_type = SignalType::Buy;
+                confidence += 0.25;
+                reasoning.push(format!("Stochastic oversold: K ({:.2}) > D ({:.2}) from oversold", stochastic.k, stochastic.d));
+            }
+            
+            // Overbought with bearish crossover
+            if stochastic.overbought && stochastic.k < stochastic.d && signal_type == SignalType::Hold {
+                signal_type = SignalType::Sell;
+                confidence += 0.25;
+                reasoning.push(format!("Stochastic overbought: K ({:.2}) < D ({:.2}) from overbought", stochastic.k, stochastic.d));
+            }
+        }
+
+        // Strategy 13: RSI Divergence Analysis (NEW)
+        if let Some(rsi_divergence) = short_term_indicators.rsi_divergence {
+            if rsi_divergence > 0.0 && signal_type == SignalType::Hold {
+                signal_type = SignalType::Buy;
+                confidence += 0.3;
+                reasoning.push(format!("RSI bullish divergence: Divergence score ({:.2})", rsi_divergence));
+            } else if rsi_divergence < 0.0 && signal_type == SignalType::Hold {
+                signal_type = SignalType::Sell;
+                confidence += 0.3;
+                reasoning.push(format!("RSI bearish divergence: Divergence score ({:.2})", rsi_divergence));
+            }
+        }
+
+        // Strategy 14: Confluence Score Boost (NEW)
+        if let Some(confluence_score) = short_term_indicators.confluence_score {
+            if confluence_score > 0.6 {
+                confidence += confluence_score * 0.2; // Boost confidence by up to 20% based on confluence
+                reasoning.push(format!("High confluence score: {:.2} - multiple indicators aligned", confluence_score));
+            }
+        }
+
+        // Strategy 15: Multi-timeframe RSI Divergence
         if let (Some(short_rsi), Some(medium_rsi), Some(long_rsi)) = 
             (short_term_indicators.rsi_fast, medium_term_indicators.rsi_fast, long_term_indicators.rsi_fast) {
             
@@ -569,6 +545,7 @@ impl TradingStrategy {
                                      short_rsi, medium_rsi));
             }
         }
+        */
 
         // Cap confidence at 1.0
         confidence = confidence.min(1.0_f64);
@@ -587,8 +564,6 @@ impl TradingStrategy {
             timestamp,
             confidence,
             reasoning,
-            take_profit: dynamic_thresholds.take_profit,
-            stop_loss: dynamic_thresholds.stop_loss,
         }
     }
 
@@ -751,12 +726,199 @@ impl TradingStrategy {
     }
 
     pub fn calculate_price_momentum(&self, prices: &[f64]) -> Option<f64> {
-        if prices.len() < 5 {
+        if prices.len() < 2 {
             return None;
         }
+        
+        let current = prices[prices.len() - 1];
+        let previous = prices[prices.len() - 2];
+        Some((current - previous) / previous)
+    }
 
-        let recent = prices[prices.len() - 1];
-        let older = prices[prices.len() - 5];
-        Some((recent - older) / older)
+    // New indicator calculations
+    pub fn calculate_bollinger_bands(&self, prices: &[f64], period: usize, std_dev: f64) -> Option<BollingerBands> {
+        if prices.len() < period {
+            return None;
+        }
+        
+        let sma = self.calculate_sma(prices, period)?;
+        let variance = prices.iter()
+            .skip(prices.len() - period)
+            .map(|&price| (price - sma).powi(2))
+            .sum::<f64>() / period as f64;
+        let std = variance.sqrt();
+        
+        let upper = sma + (std_dev * std);
+        let lower = sma - (std_dev * std);
+        let bandwidth = (upper - lower) / sma;
+        let percent_b = (prices.last().unwrap() - lower) / (upper - lower);
+        let squeeze = bandwidth < 0.05; // Low volatility period
+        
+        Some(BollingerBands {
+            upper,
+            middle: sma,
+            lower,
+            bandwidth,
+            percent_b,
+            squeeze,
+        })
+    }
+
+    pub fn calculate_macd(&self, prices: &[f64], fast_period: usize, slow_period: usize, signal_period: usize) -> Option<MACD> {
+        if prices.len() < slow_period {
+            return None;
+        }
+        
+        let ema_fast = self.calculate_ema(prices, fast_period)?;
+        let ema_slow = self.calculate_ema(prices, slow_period)?;
+        let macd_line = ema_fast - ema_slow;
+        
+        // Calculate signal line (EMA of MACD line)
+        let macd_values: Vec<f64> = prices.iter()
+            .enumerate()
+            .filter_map(|(i, _)| {
+                if i >= slow_period - 1 {
+                    let fast_ema = self.calculate_ema(&prices[..=i], fast_period)?;
+                    let slow_ema = self.calculate_ema(&prices[..=i], slow_period)?;
+                    Some(fast_ema - slow_ema)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        
+        let signal_line = if macd_values.len() >= signal_period {
+            self.calculate_ema(&macd_values, signal_period)?
+        } else {
+            macd_values.last().copied().unwrap_or(0.0)
+        };
+        
+        let histogram = macd_line - signal_line;
+        
+        // Detect crossovers (simplified - would need previous values for full implementation)
+        let bullish_crossover = macd_line > signal_line && histogram > 0.0;
+        let bearish_crossover = macd_line < signal_line && histogram < 0.0;
+        
+        Some(MACD {
+            macd_line,
+            signal_line,
+            histogram,
+            bullish_crossover,
+            bearish_crossover,
+        })
+    }
+
+    pub fn calculate_exponential_smoothing(&self, prices: &[f64]) -> Option<ExponentialSmoothing> {
+        if prices.len() < 50 {
+            return None;
+        }
+        
+        let ema_12 = self.calculate_ema(prices, 12)?;
+        let ema_26 = self.calculate_ema(prices, 26)?;
+        let ema_50 = self.calculate_ema(prices, 50)?;
+        
+        // Use EMA-12 as smoothed price for noise reduction
+        let smoothed_price = ema_12;
+        
+        Some(ExponentialSmoothing {
+            ema_12,
+            ema_26,
+            ema_50,
+            smoothed_price,
+        })
+    }
+
+    fn calculate_ema(&self, prices: &[f64], period: usize) -> Option<f64> {
+        if prices.len() < period {
+            return None;
+        }
+        
+        let alpha = 2.0 / (period as f64 + 1.0);
+        let mut ema = prices[0];
+        
+        for &price in prices.iter().skip(1) {
+            ema = alpha * price + (1.0 - alpha) * ema;
+        }
+        
+        Some(ema)
+    }
+
+    pub fn calculate_stochastic(&self, prices: &[f64], k_period: usize, d_period: usize) -> Option<crate::models::StochasticOscillator> {
+        if prices.len() < k_period + d_period {
+            return None;
+        }
+        let mut k_values = Vec::new();
+        for i in k_period..=prices.len() {
+            let window = &prices[i - k_period..i];
+            let high = window.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let low = window.iter().cloned().fold(f64::INFINITY, f64::min);
+            let close = window[window.len() - 1];
+            let k = if (high - low).abs() < 1e-8 { 0.0 } else { (close - low) / (high - low) };
+            k_values.push(k);
+        }
+        let k = *k_values.last().unwrap_or(&0.0);
+        let d = if k_values.len() >= d_period {
+            k_values[k_values.len() - d_period..].iter().sum::<f64>() / d_period as f64
+        } else {
+            k
+        };
+        let overbought = k > 0.8;
+        let oversold = k < 0.2;
+        Some(crate::models::StochasticOscillator { k, d, overbought, oversold })
+    }
+
+    pub fn calculate_rsi_divergence(&self, prices: &[f64], period: usize) -> Option<f64> {
+        if prices.len() < period * 2 {
+            return None;
+        }
+        let rsi = self.calculate_rsi(prices, period)?;
+        let prev_rsi = self.calculate_rsi(&prices[..prices.len() - period], period)?;
+        let price_change = prices.last().unwrap() - prices[prices.len() - period - 1];
+        let rsi_change = rsi - prev_rsi;
+        // Divergence: price up, RSI down (bearish), or price down, RSI up (bullish)
+        if price_change > 0.0 && rsi_change < 0.0 {
+            Some(-1.0) // Bearish divergence
+        } else if price_change < 0.0 && rsi_change > 0.0 {
+            Some(1.0) // Bullish divergence
+        } else {
+            Some(0.0) // No divergence
+        }
+    }
+
+    pub fn calculate_confluence_score(
+        &self,
+        rsi_fast: &Option<f64>,
+        bollinger_bands: &Option<BollingerBands>,
+        macd: &Option<MACD>,
+        stochastic: &Option<crate::models::StochasticOscillator>,
+        rsi_divergence: &Option<f64>,
+    ) -> Option<f64> {
+        let mut score = 0.0;
+        if let Some(rsi) = rsi_fast {
+            if *rsi > 60.0 || *rsi < 40.0 {
+                score += 0.2;
+            }
+        }
+        if let Some(bb) = bollinger_bands {
+            if bb.percent_b < 0.2 || bb.percent_b > 0.8 {
+                score += 0.2;
+            }
+        }
+        if let Some(macd) = macd {
+            if macd.bullish_crossover || macd.bearish_crossover {
+                score += 0.2;
+            }
+        }
+        if let Some(stoch) = stochastic {
+            if stoch.overbought || stoch.oversold {
+                score += 0.2;
+            }
+        }
+        if let Some(div) = rsi_divergence {
+            if *div != 0.0 {
+                score += 0.2;
+            }
+        }
+        Some(score)
     }
 } 

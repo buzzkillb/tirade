@@ -45,18 +45,16 @@ pub struct TechnicalIndicators {
     pub current_price: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingSignal {
     pub signal_type: SignalType,
-    pub confidence: f64,
     pub price: f64,
     pub timestamp: DateTime<Utc>,
+    pub confidence: f64,
     pub reasoning: Vec<String>,
-    pub take_profit: f64,
-    pub stop_loss: f64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SignalType {
     Buy,
     Sell,
@@ -72,6 +70,40 @@ pub struct TradingIndicators {
     pub volatility: Option<f64>,
     pub price_momentum: Option<f64>,
     pub price_change_percent: f64,
+    pub bollinger_bands: Option<BollingerBands>,
+    pub macd: Option<MACD>,
+    pub exponential_smoothing: Option<ExponentialSmoothing>,
+    // Phase 2
+    pub stochastic: Option<StochasticOscillator>,
+    pub rsi_divergence: Option<f64>,
+    pub confluence_score: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BollingerBands {
+    pub upper: f64,
+    pub middle: f64,
+    pub lower: f64,
+    pub bandwidth: f64,
+    pub percent_b: f64,
+    pub squeeze: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MACD {
+    pub macd_line: f64,
+    pub signal_line: f64,
+    pub histogram: f64,
+    pub bullish_crossover: bool,
+    pub bearish_crossover: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExponentialSmoothing {
+    pub ema_12: f64,
+    pub ema_26: f64,
+    pub ema_50: f64,
+    pub smoothed_price: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -98,7 +130,7 @@ pub struct TechnicalIndicator {
     pub period: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingSignalDb {
     pub pair: String,
     pub timestamp: DateTime<Utc>,
@@ -106,8 +138,6 @@ pub struct TradingSignalDb {
     pub confidence: f64,
     pub price: f64,
     pub reasoning: String,
-    pub take_profit: f64,
-    pub stop_loss: f64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -128,8 +158,6 @@ pub struct PositionDb {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub current_price: f64,
-    pub take_profit: Option<f64>,
-    pub stop_loss: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -185,4 +213,12 @@ pub struct StoreTechnicalIndicatorsRequest {
     pub price_change_percent_24h: Option<f64>,
     pub volatility_24h: Option<f64>,
     pub current_price: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StochasticOscillator {
+    pub k: f64,
+    pub d: f64,
+    pub overbought: bool,
+    pub oversold: bool,
 } 

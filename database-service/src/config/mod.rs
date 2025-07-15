@@ -10,8 +10,11 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let database_url = env::var("DATABASE_URL")
+        let sqlite_path = env::var("SQLITE_DB_PATH")
             .unwrap_or_else(|_| "../data/trading_bot.db".to_string());
+        
+        // Format as SQLite connection string
+        let database_url = format!("sqlite:{}", sqlite_path);
             
         let port = env::var("PORT")
             .unwrap_or_else(|_| "8080".to_string())

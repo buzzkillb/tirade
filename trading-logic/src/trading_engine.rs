@@ -3,6 +3,7 @@ use crate::models::{PriceFeed, TechnicalIndicators, TradingSignal, SignalType};
 use crate::models::{TechnicalIndicator, TradingSignalDb, PositionDb, TradeDb, TradingConfigDb};
 use crate::strategy::TradingStrategy;
 use crate::trading_executor::TradingExecutor;
+use crate::ml_strategy::{MLStrategy, TradeResult};
 use anyhow::{Result, anyhow};
 use reqwest::Client;
 use std::time::Duration;
@@ -17,6 +18,7 @@ pub struct TradingEngine {
     current_position: Option<Position>,
     last_analysis_time: Option<chrono::DateTime<Utc>>,
     trading_executor: TradingExecutor,
+    ml_strategy: MLStrategy,
 }
 
 #[derive(Debug, Clone)]
@@ -44,822 +46,73 @@ impl TradingEngine {
         let trading_executor = TradingExecutor::new()?;
 
         Ok(Self {
-            config,
+            config: config.clone(),
             strategy,
             client,
             current_position: None,
             last_analysis_time: None,
             trading_executor,
+            ml_strategy: MLStrategy::new(config),
         })
     }
 
     pub async fn run(&mut self) -> Result<()> {
         info!("🚀 Starting Trading Logic Engine...");
-        info!("═══════════════════════════════════════════════════════════════");
         info!("  📊 Trading Pair: {}", self.config.trading_pair);
-        info!("  🎯 Min Data Points: {}", self.config.min_data_points);
-        info!("  ⏱️  Check Interval: {} seconds", self.config.check_interval_secs);
-        info!("  🛑 Stop Loss: {:.2}%", self.config.stop_loss_threshold * 100.0);
-        info!("  💰 Take Profit: {:.2}%", self.config.take_profit_threshold * 100.0);
-        info!("  🌐 Database URL: {}", self.config.database_url);
         info!("  🔄 Trading Execution: {}", if self.trading_executor.is_trading_enabled() { "ENABLED" } else { "PAPER TRADING" });
         info!("  💰 Position Size: {:.1}% of balance", self.trading_executor.get_position_size_percentage() * 100.0);
         info!("  📊 Slippage Tolerance: {:.1}%", self.trading_executor.get_slippage_tolerance() * 100.0);
         info!("  🎯 Min Confidence: {:.1}%", self.trading_executor.get_min_confidence_threshold() * 100.0);
-        info!("═══════════════════════════════════════════════════════════════");
-        info!("");
+
+        // Load ML trade history from database
+        if let Err(e) = self.ml_strategy.load_trade_history(&self.config.trading_pair).await {
+            warn!("Failed to load ML trade history: {}", e);
+        }
 
         // Post initial trading config to database
         if let Err(e) = self.post_trading_config().await {
             warn!("Failed to post initial trading config: {}", e);
         }
 
-        // Recover positions from database
-        info!("🔄 Attempting to recover positions from database...");
-        match self.recover_positions().await {
-            Ok(_) => {
-                if self.current_position.is_some() {
-                    info!("✅ Successfully recovered existing position");
-                } else {
-                    info!("💤 No existing positions found - ready for new trades");
-                }
-            }
-            Err(e) => {
-                warn!("⚠️  Failed to recover positions: {}", e);
-                info!("🔄 Will retry position recovery on next cycle");
-            }
+        // Recover any existing positions from database
+        if let Err(e) = self.recover_positions().await {
+            warn!("Failed to recover positions: {}", e);
         }
 
         loop {
-            match self.trading_cycle().await {
-                Ok(_) => {
-                    // Log cycle completion with timestamp
-                    let now = Utc::now();
-                    if let Some(last_time) = self.last_analysis_time {
-                        let duration = now - last_time;
-                        debug!("✅ Trading cycle completed in {}ms", duration.num_milliseconds());
-                    }
-                    self.last_analysis_time = Some(now);
-                }
-                Err(e) => {
-                    error!("❌ Trading cycle failed: {}", e);
-                }
+            let start_time = Utc::now();
+            
+            if let Err(e) = self.trading_cycle().await {
+                error!("Trading cycle error: {}", e);
             }
-
-            tokio::time::sleep(Duration::from_secs(self.config.check_interval_secs)).await;
+            
+            let duration = Utc::now() - start_time;
+            debug!("✅ Trading cycle completed in {}ms", duration.num_milliseconds());
+            
+            // Sleep for 30 seconds between cycles
+            tokio::time::sleep(Duration::from_secs(30)).await;
         }
     }
 
-    fn create_progress_bar(&self, percentage: f64) -> String {
-        let width = 20;
-        let filled = (percentage / 100.0 * width as f64) as usize;
-        let empty = width - filled;
-        
-        let filled_char = "█";
-        let empty_char = "░";
-        
-        format!("[{}{}]", 
-                filled_char.repeat(filled), 
-                empty_char.repeat(empty))
-    }
-
-    async fn trading_cycle(&mut self) -> Result<()> {
-        // Step 0: ALWAYS attempt position recovery to ensure accurate state
-        debug!("🔄 Ensuring accurate position state...");
-        match self.recover_positions().await {
-            Ok(_) => {
-                if self.current_position.is_some() {
-                    info!("📈 Position state confirmed: Active position exists");
-                } else {
-                    info!("💤 Position state confirmed: No active position");
-                }
-            }
-            Err(e) => {
-                warn!("⚠️ Position recovery failed: {}", e);
-                // If position recovery fails, we should be conservative and assume we might have a position
-                // This prevents executing trades when we're unsure of our state
-                if self.current_position.is_none() {
-                    warn!("🚫 Position state unclear - skipping signal analysis to prevent duplicate trades");
-                    return Ok(());
-                }
-            }
-        }
-        
-        // Step 1: Check if we have enough data
-        let data_points = self.get_data_point_count().await?;
-        if data_points < self.config.min_data_points {
-            let progress = (data_points as f64 / self.config.min_data_points as f64 * 100.0).min(100.0);
-            let progress_bar = self.create_progress_bar(progress);
-            
-            // Calculate time estimates
-            let remaining_points = self.config.min_data_points - data_points;
-            let estimated_minutes = remaining_points as f64 / 2.0; // Assuming ~2 data points per minute
-            let estimated_seconds = (estimated_minutes * 60.0) as u64;
-            
-            // Show detailed progress info
-            info!("");
-            info!("🔄 Data Collection Status:");
-            info!("  📊 Progress: {}/{} ({:.1}%) {}", 
-                  data_points, self.config.min_data_points, progress, progress_bar);
-            info!("  ⏱️  Time Remaining: {:.0}m {:.0}s", 
-                  estimated_minutes.floor(), estimated_seconds % 60);
-            info!("  📈 Data Rate: ~2 points/minute");
-            info!("  🎯 Target: {} points for reliable analysis", self.config.min_data_points);
-            
-            if data_points > 0 {
-                let completion_percentage = (data_points as f64 / self.config.min_data_points as f64 * 100.0).min(100.0);
-                if completion_percentage > 50.0 {
-                    info!("  🚀 Good progress! Keep collecting data...");
-                } else if completion_percentage > 25.0 {
-                    info!("  📈 Making steady progress...");
-                } else {
-                    info!("  🔄 Just getting started...");
-                }
-            }
-            info!("");
-            return Ok(());
-        }
-
-        // Step 2: Fetch price history
-        let prices = self.fetch_price_history().await?;
+    fn log_analysis(&self, signal: &TradingSignal, prices: &[PriceFeed], _indicators: &TechnicalIndicators) {
         if prices.is_empty() {
-            warn!("⚠️  No price data available");
-            return Ok(());
+            return;
         }
 
-        // Step 3: Calculate strategy indicators from price data
-        let strategy_indicators = self.strategy.calculate_custom_indicators(&prices);
-
-        // Step 3.5: Calculate and post consolidated technical indicators for dashboard
-        let consolidated_indicators = self.calculate_consolidated_indicators(&prices, &strategy_indicators);
-        if let Err(e) = self.post_consolidated_indicators(&consolidated_indicators).await {
-            warn!("Failed to post consolidated indicators: {}", e);
-        }
-
-        // Step 3.6: Post individual indicators for backward compatibility
-        if let Err(e) = self.post_all_indicators(&consolidated_indicators).await {
-            warn!("Failed to post individual indicators: {}", e);
-        }
-
-        // Step 4: Analyze and generate signal
-        let signal = self.strategy.analyze(&prices, &consolidated_indicators);
-
-        // Step 4.5: STRICT position validation (no cooldown needed)
-        let now = Utc::now();
-        
-        // CRITICAL: Double-check position state before any signal execution
-        let has_position = self.current_position.is_some();
-        info!("🔍 Signal validation - Position state: {}", if has_position { "ACTIVE" } else { "NONE" });
-        
-        // STRICT RULE: No BUY signals if we already have a position
-        if signal.signal_type == SignalType::Buy && has_position {
-            info!("🚫 BLOCKED: BUY signal ignored - already have a position");
-            info!("📊 Current position: {:?} at ${:.4}", 
-                  self.current_position.as_ref().unwrap().position_type,
-                  self.current_position.as_ref().unwrap().entry_price);
-            
-            // Still post the signal to database for monitoring, but don't execute
-            if let Err(e) = self.post_trading_signal(&signal).await {
-                warn!("Failed to post signal: {}", e);
-            }
-            
-            // Log the analysis but skip execution
-            self.log_analysis(&signal, &prices, &consolidated_indicators);
-            return Ok(());
-        }
-        
-        // Step 4.6: Post trading signal to database
-        if let Err(e) = self.post_trading_signal(&signal).await {
-            warn!("Failed to post signal: {}", e);
-        }
-
-        // Step 5: Execute trading logic
-        self.execute_signal(&signal).await?;
-        
-        // Step 6: Log the analysis
-        self.log_analysis(&signal, &prices, &consolidated_indicators);
-
-        Ok(())
-    }
-
-    async fn get_data_point_count(&self) -> Result<usize> {
-        use urlencoding::encode;
-        let url = format!("{}/prices/{}", self.config.database_url, encode(&self.config.trading_pair));
-        
-        let response = self.client.get(&url).send().await?;
-        let text = response.text().await?;
-        debug!("Raw data point count response: {}", text);
-        if text.trim().is_empty() {
-            warn!("Data point count endpoint returned empty response");
-            return Ok(0);
-        }
-        let api_response: Result<crate::models::ApiResponse<Vec<PriceFeed>>, _> = serde_json::from_str(&text);
-        match api_response {
-            Ok(crate::models::ApiResponse { success: true, data: Some(prices), .. }) => {
-                info!("📊 API Response - Success: {}, Data points: {}", true, prices.len());
-                Ok(prices.len())
-            }
-            Ok(crate::models::ApiResponse { success: false, error: Some(e), .. }) => {
-                warn!("⚠️ API call failed: {}", e);
-                Ok(0)
-            }
-            _ => {
-                warn!("⚠️ Unexpected API response format");
-                Ok(0)
-            }
-        }
-    }
-
-    async fn fetch_price_history(&self) -> Result<Vec<PriceFeed>> {
-        use urlencoding::encode;
-        // Try to fetch 1-minute candles first for better analysis
-        let candle_url = format!("{}/candles/{}/1m?limit=200", 
-                                self.config.database_url, 
-                                encode(&self.config.trading_pair));
-        
-        let response = self.client.get(&candle_url).send().await?;
-        let text = response.text().await?;
-        debug!("Raw candle response: {}", text);
-        if text.trim().is_empty() {
-            warn!("Candle endpoint returned empty response");
-        }
-        let api_response: Result<crate::models::ApiResponse<Vec<crate::models::Candle>>, _> = serde_json::from_str(&text);
-        if let Ok(api_response) = api_response {
-            match api_response {
-                crate::models::ApiResponse { success: true, data: Some(candles), .. } => {
-                    if !candles.is_empty() {
-                        info!("📊 Using {} 1-minute candles for analysis", candles.len());
-                        
-                        // Log candle details for debugging
-                        if let Some(latest_candle) = candles.first() {
-                            info!("🕯️  Latest candle: O={:.4}, H={:.4}, L={:.4}, C={:.4}, Time={}", 
-                                  latest_candle.open, latest_candle.high, latest_candle.low, 
-                                  latest_candle.close, latest_candle.timestamp.format("%H:%M:%S"));
-                        }
-                        
-                        if candles.len() >= 2 {
-                            let prev_candle = &candles[1];
-                            info!("🕯️  Previous candle: O={:.4}, H={:.4}, L={:.4}, C={:.4}, Time={}", 
-                                  prev_candle.open, prev_candle.high, prev_candle.low, 
-                                  prev_candle.close, prev_candle.timestamp.format("%H:%M:%S"));
-                        }
-                        
-                        let prices: Vec<PriceFeed> = candles.into_iter().map(|candle| PriceFeed {
-                            id: candle.id,
-                            source: "candle".to_string(),
-                            pair: candle.pair,
-                            price: candle.close,
-                            timestamp: candle.timestamp,
-                        }).collect();
-                        return Ok(prices);
-                    }
-                }
-                _ => {
-                    debug!("No candle data available, falling back to raw prices");
-                }
-            }
-        } else {
-            warn!("Failed to parse candle response as JSON");
-        }
-        // Fallback to raw price data if candles are not available
-        let url = format!("{}/prices/{}", self.config.database_url, encode(&self.config.trading_pair));
-        let response = self.client.get(&url).send().await?;
-        let text = response.text().await?;
-        debug!("Raw price response: {}", text);
-        if text.trim().is_empty() {
-            warn!("Price endpoint returned empty response");
-            return Ok(vec![]);
-        }
-        let api_response: Result<crate::models::ApiResponse<Vec<PriceFeed>>, _> = serde_json::from_str(&text);
-        match api_response {
-            Ok(crate::models::ApiResponse { success: true, data: Some(prices), .. }) => {
-                info!("📊 Using {} raw price records for analysis", prices.len());
-                Ok(prices)
-            }
-            Ok(crate::models::ApiResponse { success: false, error: Some(e), .. }) => {
-                Err(anyhow::anyhow!("API error: {}", e))
-            }
-            _ => {
-                Err(anyhow::anyhow!("Unexpected or invalid response format"))
-            }
-        }
-    }
-
-    async fn fetch_technical_indicators(&self) -> Result<TechnicalIndicators> {
-        use urlencoding::encode;
-        let url = format!(
-            "{}/indicators/{}?hours=24",
-            self.config.database_url,
-            encode(&self.config.trading_pair)
-        );
-
-        let response = self.client.get(&url).send().await?;
-        let text = response.text().await?;
-        debug!("Raw technical indicators response: {}", text);
-        if text.trim().is_empty() {
-            warn!("Technical indicators endpoint returned empty response");
-            return Err(anyhow!("Empty response from technical indicators endpoint"));
-        }
-        let api_response: Result<crate::models::ApiResponse<TechnicalIndicators>, _> = serde_json::from_str(&text);
-        match api_response {
-            Ok(crate::models::ApiResponse { success: true, data: Some(indicators), .. }) => {
-                Ok(indicators)
-            }
-            Ok(crate::models::ApiResponse { success: false, error: Some(e), .. }) => {
-                Err(anyhow!("Failed to fetch technical indicators: {}", e))
-            }
-            _ => {
-                Err(anyhow!("Unexpected response format"))
-            }
-        }
-    }
-
-    async fn execute_signal(&mut self, signal: &TradingSignal) -> Result<()> {
-        match signal.signal_type {
-            SignalType::Buy => {
-                // Double safety check - should never reach here if we already have a position
-                if self.current_position.is_none() {
-                    info!("🟢 BUY signal detected - no current position, executing trade...");
-                    // Execute the trade using trading executor
-                    match self.trading_executor.execute_signal(signal, None).await {
-                        Ok((true, quantity)) => {
-                            // Trade executed successfully (or paper trading)
-                            let actual_quantity = quantity.unwrap_or(1.0); // Default to 1.0 if no quantity available
-                            self.open_position(signal.price, PositionType::Long, actual_quantity).await?;
-                            
-                            info!("");
-                            info!("🟢 BUY SIGNAL EXECUTED");
-                            info!("═══════════════════════════════════════════════════════════════");
-                            info!("  💰 Entry Price: ${:.4}", signal.price);
-                            info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
-                            info!("  📊 Position Type: Long");
-                            info!("  🎯 Dynamic Take Profit: {:.2}%", signal.take_profit * 100.0);
-                            info!("  🛑 Dynamic Stop Loss: {:.2}%", signal.stop_loss * 100.0);
-                            info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
-                            info!("═══════════════════════════════════════════════════════════════");
-                            info!("");
-                        }
-                        Ok((false, _)) => {
-                            warn!("⚠️  BUY signal execution failed or was skipped");
-                        }
-                        Err(e) => {
-                            error!("❌ BUY signal execution error: {}", e);
-                            // Don't create a position if the transaction failed
-                            // The position creation is now handled in open_position
-                        }
-                    }
-                } else {
-                    error!("🚫 CRITICAL: BUY signal reached execute_signal with existing position - this should never happen!");
-                    info!("📊 Current position: {:?} at ${:.4}", 
-                          self.current_position.as_ref().unwrap().position_type,
-                          self.current_position.as_ref().unwrap().entry_price);
-                    info!("🛑 Blocking execution to prevent multiple positions");
-                }
-            }
-            SignalType::Sell => {
-                if let Some(position) = &self.current_position {
-                    // Extract position data before mutable borrow
-                    let entry_price = position.entry_price;
-                    let entry_time = position.entry_time;
-                    let position_type = position.position_type.clone();
-                    let position_quantity = position.quantity;
-                    
-                    // Execute the trade using trading executor
-                    match self.trading_executor.execute_signal(signal, Some(position_quantity)).await {
-                        Ok((true, _)) => {
-                            // Trade executed successfully (or paper trading)
-                            let pnl = self.calculate_pnl(signal.price, position);
-                            let duration = Utc::now() - entry_time;
-                            self.close_position(signal.price).await?;
-                            
-
-                            
-                            let pnl_emoji = if pnl > 0.0 { "💰" } else if pnl < 0.0 { "💸" } else { "➡️" };
-                            let pnl_status = if pnl > 0.0 { "PROFIT" } else if pnl < 0.0 { "LOSS" } else { "BREAKEVEN" };
-                            
-                            info!("");
-                            info!("🔴 SELL SIGNAL EXECUTED - {}", pnl_status);
-                            info!("═══════════════════════════════════════════════════════════════");
-                            info!("  💰 Exit Price: ${:.4}", signal.price);
-                            info!("  📈 Entry Price: ${:.4}", entry_price);
-                            info!("  {} PnL: {:.2}%", pnl_emoji, pnl * 100.0);
-                            info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
-                            info!("  ⏱️  Duration: {}s", duration.num_seconds());
-                            info!("  📊 Position Type: {:?}", position_type);
-                            info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
-                            info!("═══════════════════════════════════════════════════════════════");
-                            info!("");
-                        }
-                        Ok((false, _)) => {
-                            warn!("⚠️  SELL signal execution failed or was skipped");
-                        }
-                        Err(e) => {
-                            error!("❌ SELL signal execution error: {}", e);
-                        }
-                    }
-                } else {
-                    debug!("No position to sell");
-                }
-            }
-            SignalType::Hold => {
-                // Check for stop loss or take profit using dynamic thresholds
-                if let Some(position) = &self.current_position {
-                    let pnl = self.calculate_pnl(signal.price, position);
-                    
-                    // Minimum hold time check (5 minutes = 300 seconds)
-                    let duration = Utc::now() - position.entry_time;
-                    let min_hold_time_seconds = 300; // 5 minutes minimum hold
-                    
-                    if duration.num_seconds() < min_hold_time_seconds {
-                        debug!("⏳ Position held for {}s, minimum hold time is {}s - waiting for profit", 
-                               duration.num_seconds(), min_hold_time_seconds);
-                        return Ok(());
-                    }
-                    
-                    // Enhanced exit conditions for quick swaps
-                    let should_exit = self.check_enhanced_exit_conditions(signal, position, pnl).await?;
-                    
-                    if should_exit {
-                        let entry_price = position.entry_price;
-                        let entry_time = position.entry_time;
-                        let position_type = position.position_type.clone();
-                        let position_quantity = position.quantity;
-                        
-                        // Execute the sell transaction first
-                        match self.trading_executor.execute_signal(signal, Some(position_quantity)).await {
-                            Ok((true, _)) => {
-                                // Trade executed successfully, now close position in database
-                                self.close_position(signal.price).await?;
-                                
-                                info!("");
-                                info!("🚀 ENHANCED EXIT TRIGGERED");
-                                info!("═══════════════════════════════════════════════════════════════");
-                                info!("  💰 Exit Price: ${:.4}", signal.price);
-                                info!("  📈 Entry Price: ${:.4}", entry_price);
-                                info!("  💰 PnL: {:.2}%", pnl * 100.0);
-                                info!("  ⏱️  Duration: {}s", duration.num_seconds());
-                                info!("  ⏰ Timestamp: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
-                                info!("═══════════════════════════════════════════════════════════════");
-                                info!("");
-                            }
-                            Ok((false, _)) => {
-                                warn!("⚠️  ENHANCED EXIT signal execution failed or was skipped");
-                            }
-                            Err(e) => {
-                                error!("❌ ENHANCED EXIT signal execution error: {}", e);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn open_position(&mut self, price: f64, position_type: PositionType, quantity: f64) -> Result<()> {
-        // Safety check: Ensure we don't already have a position
-        if self.current_position.is_some() {
-            warn!("🚫 SAFETY CHECK FAILED: Attempted to open position when one already exists!");
-            warn!("📊 Existing position: {:?} at ${:.4}", 
-                  self.current_position.as_ref().unwrap().position_type,
-                  self.current_position.as_ref().unwrap().entry_price);
-            warn!("🎯 Attempted to open: {:?} at ${:.4}", position_type, price);
-            return Err(anyhow!("Cannot open position - one already exists"));
-        }
-        
-        // Additional safety check: Check if there's already an open position in the database
-        match self.fetch_open_positions().await {
-            Ok(Some(existing_position)) => {
-                warn!("🚫 Database already has an open position: {:?} at ${:.4}", 
-                      existing_position.position_type, existing_position.entry_price);
-                warn!("🔄 Recovering existing position instead of creating new one");
-                self.current_position = Some(existing_position);
-                return Ok(());
-            }
-            Ok(None) => {
-                // No existing position, proceed with creation
-            }
-            Err(e) => {
-                warn!("⚠️ Failed to check for existing positions: {}", e);
-                // Continue anyway, but log the warning
-            }
-        }
-        
-        let log_type = position_type.clone();
-        let position = Position {
-            position_id: None,
-            entry_price: price,
-            entry_time: Utc::now(),
-            quantity, // Use the actual quantity received from the transaction
-            position_type,
-        };
-        
-        // Set the position in memory FIRST to prevent race conditions
-        self.current_position = Some(position.clone());
-        
-        // Now post position to database and get the position ID
-        match self.post_position(&position, 0.05, 0.03).await {
-            Ok(position_id) => {
-                // Update the position with the ID from database
-                if let Some(ref mut final_position) = &mut self.current_position {
-                    final_position.position_id = Some(position_id.clone());
-                }
-                
-                info!("📈 Opened {:?} position at ${:.4} with quantity {:.6}", log_type, price, quantity);
-                info!("🔒 Position safety check passed - no duplicate positions");
-                info!("🆔 Database position ID: {}", position_id);
-                Ok(())
-            }
-            Err(e) => {
-                // If database posting fails, roll back the in-memory position
-                error!("❌ Failed to post position to database: {}", e);
-                self.current_position = None;
-                Err(anyhow!("Database posting failed: {}", e))
-            }
-        }
-    }
-
-    async fn close_position(&mut self, price: f64) -> Result<()> {
-        if let Some(position) = &self.current_position {
-            let pnl = self.calculate_pnl(price, position);
-            let duration = Utc::now() - position.entry_time;
-            
-            info!("📉 Closed position at ${:.4} - PnL: {:.2}% (Duration: {}s)", 
-                  price, pnl * 100.0, duration.num_seconds());
-            
-            // Close position in database - CRITICAL: Must succeed before clearing memory
-            match self.close_position_in_database(price).await {
-                Ok(_) => {
-                    info!("✅ Successfully closed position in database, clearing from memory");
-                    self.current_position = None;
-                }
-                Err(e) => {
-                    error!("❌ CRITICAL: Failed to close position in database: {}", e);
-                    error!("🚫 Keeping position in memory to prevent inconsistency");
-                    error!("🔄 Position will be retried on next cycle");
-                    return Err(anyhow!("Database close failed: {}", e));
-                }
-            }
-        } else {
-            warn!("⚠️  Attempted to close position but no position in memory");
-        }
-        
-        Ok(())
-    }
-
-    fn calculate_pnl(&self, current_price: f64, position: &Position) -> f64 {
-        match position.position_type {
-            PositionType::Long => (current_price - position.entry_price) / position.entry_price,
-            PositionType::Short => (position.entry_price - current_price) / position.entry_price,
-        }
-    }
-
-    fn log_analysis(&self, signal: &TradingSignal, prices: &[PriceFeed], indicators: &TechnicalIndicators) {
-        let price_count = prices.len();
-        let current_price = signal.price;
-        
-        // Get latest price change
+        let current_price = prices.last().unwrap().price;
         let price_change = if prices.len() >= 2 {
-            let current = prices.last().unwrap().price;
+            let current = prices[prices.len() - 1].price;
             let previous = prices[prices.len() - 2].price;
-            let change = ((current - previous) / previous) * 100.0;
-            Some(change)
+            (current - previous) / previous
         } else {
-            None
+            0.0
         };
-        
-        info!("");
-        info!("🎯 Enhanced Trading Analysis Report");
-        info!("═══════════════════════════════════════════════════════════════");
-        info!("  💰 Current Price: ${:.4}", current_price);
-        
-        if let Some(change) = price_change {
-            let change_emoji = if change > 0.0 { "📈" } else if change < 0.0 { "📉" } else { "➡️" };
-            info!("  {} Price Change: {:.3}%", change_emoji, change);
+
+        // Only log analysis for actual signals, not holds
+        if signal.signal_type != SignalType::Hold {
+            info!("📊 Analysis: {:?} at ${:.4} | Change: {:.2}% | Conf: {:.0}%", 
+                  signal.signal_type, current_price, price_change * 100.0, signal.confidence * 100.0);
         }
-        
-        info!("  📊 Data Points: {} | Signal: {:?}", price_count, signal.signal_type);
-        info!("  🎯 Confidence: {:.1}%", signal.confidence * 100.0);
-        
-        // Log data source information
-        if !prices.is_empty() {
-            let data_source = prices.first().unwrap().source.as_str();
-            if data_source == "candle" {
-                info!("  🕯️  Data Source: 1-minute candles (OHLC)");
-                if prices.len() >= 2 {
-                    let latest = prices.last().unwrap();
-                    let previous = &prices[prices.len() - 2];
-                    let candle_range = ((latest.price - previous.price) / previous.price) * 100.0;
-                    info!("  📈 Candle Range: {:.3}% (${:.4} → ${:.4})", 
-                          candle_range, previous.price, latest.price);
-                }
-            } else {
-                info!("  📊 Data Source: Raw price data");
-            }
-        }
-        
-        // Position status with enhanced information
-        if let Some(position) = &self.current_position {
-            let pnl = self.calculate_pnl(current_price, position);
-            let duration = Utc::now() - position.entry_time;
-            let pnl_emoji = if pnl > 0.0 { "🟢" } else if pnl < 0.0 { "🔴" } else { "🟡" };
-            
-            info!("  📈 Active Position: {:?} | Entry: ${:.4}", position.position_type, position.entry_price);
-            info!("  {} Unrealized PnL: {:.2}% | Duration: {}s", pnl_emoji, pnl * 100.0, duration.num_seconds());
-            
-            // Calculate distance to take profit and stop loss
-            let tp_distance = if pnl > 0.0 { signal.take_profit - pnl } else { signal.take_profit };
-            let sl_distance = if pnl < 0.0 { signal.stop_loss + pnl.abs() } else { signal.stop_loss };
-            
-            info!("  🎯 Take Profit: {:.2}% away | Stop Loss: {:.2}% away", 
-                  tp_distance * 100.0, sl_distance * 100.0);
-        } else {
-            info!("  💤 No active position");
-        }
-        
-        // Multi-timeframe technical indicators
-        info!("");
-        info!("📈 Multi-Timeframe Technical Indicators:");
-        
-        // Short-term indicators (30 minutes)
-        let short_term_prices = self.get_recent_prices(&prices, 30 * 60);
-        if short_term_prices.len() >= 20 {
-            let short_indicators = self.strategy.calculate_custom_indicators(&short_term_prices);
-            info!("  ⚡ Short-term (30m):");
-            if let Some(rsi) = short_indicators.rsi_fast {
-                let rsi_status = if rsi > 70.0 { "🔴 Overbought" } else if rsi < 30.0 { "🟢 Oversold" } else { "🟡 Neutral" };
-                info!("    📊 RSI: {:.2} {}", rsi, rsi_status);
-            }
-            if let Some(sma) = short_indicators.sma_short {
-                let sma_status = if current_price > sma { "📈 Above" } else { "📉 Below" };
-                info!("    📈 SMA20: {:.4} {}", sma, sma_status);
-            }
-            if let Some(vol) = short_indicators.volatility {
-                let vol_status = if vol > 0.05 { "🔥 High" } else if vol > 0.02 { "⚡ Medium" } else { "❄️ Low" };
-                info!("    📊 Volatility: {:.2}% {}", vol * 100.0, vol_status);
-            }
-        }
-        
-        // Medium-term indicators (2 hours)
-        let medium_term_prices = self.get_recent_prices(prices, 2 * 60 * 60);
-        if medium_term_prices.len() >= 50 {
-            let medium_indicators = self.strategy.calculate_custom_indicators(&medium_term_prices);
-            info!("  📊 Medium-term (2h):");
-            if let Some(rsi) = medium_indicators.rsi_fast {
-                let rsi_status = if rsi > 70.0 { "🔴 Overbought" } else if rsi < 30.0 { "🟢 Oversold" } else { "🟡 Neutral" };
-                info!("    📊 RSI: {:.2} {}", rsi, rsi_status);
-            }
-            if let Some(sma) = medium_indicators.sma_long {
-                let sma_status = if current_price > sma { "📈 Above" } else { "📉 Below" };
-                info!("    📈 SMA50: {:.4} {}", sma, sma_status);
-            }
-        }
-        
-        // Long-term indicators (6 hours)
-        let long_term_prices = self.get_recent_prices(prices, 6 * 60 * 60);
-        if long_term_prices.len() >= 100 {
-            let long_indicators = self.strategy.calculate_custom_indicators(&long_term_prices);
-            info!("  📈 Long-term (6h):");
-            if let Some(rsi) = long_indicators.rsi_fast {
-                let rsi_status = if rsi > 70.0 { "🔴 Overbought" } else if rsi < 30.0 { "🟢 Oversold" } else { "🟡 Neutral" };
-                info!("    📊 RSI: {:.2} {}", rsi, rsi_status);
-            }
-            if let Some(sma) = long_indicators.sma_long {
-                let sma_status = if current_price > sma { "📈 Above" } else { "📉 Below" };
-                info!("    📈 SMA50: {:.4} {}", sma, sma_status);
-            }
-        }
-        
-        // Current timeframe indicators (from database)
-        info!("  📊 Current timeframe:");
-        if let Some(rsi) = indicators.rsi_14 {
-            let rsi_status = if rsi > 70.0 { "🔴 Overbought" } else if rsi < 30.0 { "�� Oversold" } else { "🟡 Neutral" };
-            info!("    📊 RSI (14): {:.2} {}", rsi, rsi_status);
-        }
-        if let Some(sma_20) = indicators.sma_20 {
-            let sma_status = if current_price > sma_20 { "📈 Above" } else { "📉 Below" };
-            info!("    📈 SMA (20): {:.4} {}", sma_20, sma_status);
-        }
-        if let Some(sma_50) = indicators.sma_50 {
-            let sma_status = if current_price > sma_50 { "📈 Above" } else { "📉 Below" };
-            info!("    📈 SMA (50): {:.4} {}", sma_50, sma_status);
-        }
-        if let Some(volatility) = indicators.volatility_24h {
-            let vol_status = if volatility > 0.05 { "🔥 High" } else if volatility > 0.02 { "⚡ Medium" } else { "❄️ Low" };
-            info!("    📊 Volatility (24h): {:.2}% {}", volatility * 100.0, vol_status);
-        }
-        if let Some(price_change_24h) = indicators.price_change_24h {
-            let change_emoji = if price_change_24h > 0.0 { "📈" } else if price_change_24h < 0.0 { "📉" } else { "➡️" };
-            info!("    {} 24h Change: {:.2}%", change_emoji, price_change_24h * 100.0);
-        }
-        
-        // Market regime and trend analysis
-        info!("");
-        info!("🎭 Market Analysis:");
-        
-        // Calculate market regime
-        let (market_regime, trend_strength) = self.analyze_market_regime(prices);
-        let regime_emoji = match market_regime.as_str() {
-            "Trending" => "📈",
-            "Ranging" => "🔄", 
-            "Volatile" => "⚡",
-            "Consolidating" => "🦀",
-            _ => "❓"
-        };
-        info!("  {} Market Regime: {} (Strength: {:.1}%)", regime_emoji, market_regime, trend_strength * 100.0);
-        
-        // Support and resistance levels
-        let (support, resistance) = self.calculate_support_resistance(prices);
-        if let Some(support_level) = support {
-            let support_distance = ((current_price - support_level) / current_price) * 100.0;
-            let support_emoji = if support_distance < 2.0 { "🟢" } else if support_distance < 5.0 { "🟡" } else { "🔴" };
-            info!("  {} Support Level: ${:.4} ({:.1}% away)", support_emoji, support_level, support_distance);
-        }
-        if let Some(resistance_level) = resistance {
-            let resistance_distance = ((resistance_level - current_price) / current_price) * 100.0;
-            let resistance_emoji = if resistance_distance < 2.0 { "🟢" } else if resistance_distance < 5.0 { "🟡" } else { "🔴" };
-            info!("  {} Resistance Level: ${:.4} ({:.1}% away)", resistance_emoji, resistance_level, resistance_distance);
-        }
-        
-        // Dynamic thresholds
-        let dynamic_thresholds = self.calculate_dynamic_thresholds(prices);
-        info!("  🎯 Dynamic Thresholds:");
-        info!("    RSI Oversold: {:.1} | RSI Overbought: {:.1}", 
-              dynamic_thresholds.rsi_oversold, dynamic_thresholds.rsi_overbought);
-        info!("    Take Profit: {:.2}% | Stop Loss: {:.2}%", 
-              dynamic_thresholds.take_profit * 100.0, dynamic_thresholds.stop_loss * 100.0);
-        info!("    Momentum Threshold: {:.2}% | Volatility Multiplier: {:.1}x", 
-              dynamic_thresholds.momentum_threshold * 100.0, dynamic_thresholds.volatility_multiplier);
-        
-        // Enhanced signal reasoning
-        info!("");
-        info!("🧠 Enhanced Signal Analysis:");
-        if signal.reasoning.is_empty() {
-            info!("  💭 No specific reasoning available");
-        } else {
-            for (i, reason) in signal.reasoning.iter().enumerate() {
-                info!("  {}. {}", i + 1, reason);
-            }
-        }
-        
-        // Risk assessment
-        info!("");
-        info!("⚠️ Risk Assessment:");
-        let volatility_risk = indicators.volatility_24h.unwrap_or(0.02);
-        let risk_level = if volatility_risk > 0.08 { "🔴 High" } else if volatility_risk > 0.04 { "🟡 Medium" } else { "🟢 Low" };
-        info!("  📊 Volatility Risk: {} ({:.2}%)", risk_level, volatility_risk * 100.0);
-        
-        if let Some(position) = &self.current_position {
-            let pnl = self.calculate_pnl(current_price, position);
-            let risk_reward_ratio = if pnl > 0.0 { signal.take_profit / pnl.abs() } else { signal.take_profit / signal.stop_loss };
-            info!("  ⚖️ Risk/Reward Ratio: {:.2}:1", risk_reward_ratio);
-            
-            let max_drawdown_potential = signal.stop_loss * 100.0;
-            info!("  📉 Max Drawdown Potential: {:.2}%", max_drawdown_potential);
-        }
-        
-        // Market sentiment based on multiple indicators
-        let mut bullish_signals = 0;
-        let mut bearish_signals = 0;
-        
-        if let Some(rsi) = indicators.rsi_14 {
-            if rsi < 30.0 { bullish_signals += 1; }
-            if rsi > 70.0 { bearish_signals += 1; }
-        }
-        if let Some(sma_20) = indicators.sma_20 {
-            if current_price > sma_20 { bullish_signals += 1; }
-            if current_price < sma_20 { bearish_signals += 1; }
-        }
-        if let Some(sma_50) = indicators.sma_50 {
-            if current_price > sma_50 { bullish_signals += 1; }
-            if current_price < sma_50 { bearish_signals += 1; }
-        }
-        
-        let sentiment = if bullish_signals > bearish_signals { "🐂 Bullish" } 
-                       else if bearish_signals > bullish_signals { "🐻 Bearish" } 
-                       else { "🦀 Sideways" };
-        
-        info!("  🎭 Market Sentiment: {} ({} bullish, {} bearish signals)", 
-              sentiment, bullish_signals, bearish_signals);
-        
-        // Performance context
-        info!("");
-        info!("📊 Performance Context:");
-        let signal_strength = if signal.confidence > 0.7 { "🟢 Strong" } else if signal.confidence > 0.5 { "🟡 Moderate" } else { "🔴 Weak" };
-        info!("  🎯 Signal Strength: {} ({:.1}%)", signal_strength, signal.confidence * 100.0);
-        
-        let market_condition = match market_regime.as_str() {
-            "Trending" => "📈 Favorable for trend following",
-            "Ranging" => "🔄 Favorable for mean reversion", 
-            "Volatile" => "⚡ High risk, high reward",
-            "Consolidating" => "🦀 Low volatility, wait for breakout",
-            _ => "❓ Unknown market condition"
-        };
-        info!("  🌍 Market Condition: {}", market_condition);
-        
-        info!("═══════════════════════════════════════════════════════════════");
-        info!("");
     }
 
     fn calculate_consolidated_indicators(&self, prices: &[PriceFeed], strategy_indicators: &crate::models::TradingIndicators) -> crate::models::TechnicalIndicators {
@@ -1053,8 +306,6 @@ impl TradingEngine {
             confidence: signal.confidence,
             price: signal.price,
             reasoning: signal.reasoning.join("; "),
-            take_profit: signal.take_profit,
-            stop_loss: signal.stop_loss,
         };
 
         let url = format!("{}/signals", self.config.database_url);
@@ -1073,7 +324,7 @@ impl TradingEngine {
         Ok(())
     }
 
-    async fn post_position(&self, position: &Position, take_profit: f64, stop_loss: f64) -> Result<String> {
+    async fn post_position(&self, position: &Position) -> Result<String> {
         // Get wallet address from Solana private key
         let wallet_address = self.trading_executor.get_wallet_address()?;
 
@@ -1184,13 +435,11 @@ impl TradingEngine {
         let config_name = format!("RSI_Trend_Strategy_{}", timestamp);
         
         let create_config_request = serde_json::json!({
-            "name": config_name,
+            "name": format!("{}_config", self.config.trading_pair),
             "pair": self.config.trading_pair,
-            "min_data_points": self.config.min_data_points as i32,
-            "check_interval_secs": self.config.check_interval_secs as i32,
-            "take_profit_percent": self.config.take_profit_threshold * 100.0,
-            "stop_loss_percent": self.config.stop_loss_threshold * 100.0,
-            "max_position_size": 100.0,
+            "min_confidence_threshold": self.config.min_confidence_threshold * 100.0,
+            "position_size_percent": self.trading_executor.get_position_size_percentage() * 100.0,
+            "slippage_tolerance_percent": self.trading_executor.get_slippage_tolerance() * 100.0,
         });
 
         let url = format!("{}/configs", self.config.database_url);
@@ -1682,88 +931,20 @@ impl TradingEngine {
         Some(variance.sqrt())
     }
 
-    fn calculate_dynamic_thresholds(&self, prices: &[PriceFeed]) -> crate::strategy::DynamicThresholds {
-        // This is a simplified version - in practice, you'd want to use the strategy's method
-        // For now, return reasonable defaults
+    fn calculate_dynamic_thresholds(&self, _prices: &[PriceFeed]) -> crate::strategy::DynamicThresholds {
+        // This function is not used but kept for compatibility
         crate::strategy::DynamicThresholds {
             rsi_oversold: 30.0,
             rsi_overbought: 70.0,
-            take_profit: 0.05, // 5%
-            stop_loss: 0.03,    // 3%
-            momentum_threshold: 0.02, // 2%
-            volatility_multiplier: 1.5,
-            market_regime: crate::strategy::MarketRegime::Ranging,
-            trend_strength: 0.5,
+            momentum_threshold: 0.003,
+            volatility_multiplier: 1.0,
+            market_regime: crate::strategy::MarketRegime::Consolidating,
+            trend_strength: 0.0,
             support_level: None,
             resistance_level: None,
         }
     }
     
-    // Enhanced exit conditions for quick swaps
-    async fn check_enhanced_exit_conditions(&self, signal: &TradingSignal, position: &Position, pnl: f64) -> Result<bool> {
-        // Get recent price data for analysis
-        let prices = self.fetch_price_history().await?;
-        
-        // 1. Traditional stop loss and take profit
-        if pnl < -signal.stop_loss {
-            info!("🛑 Stop loss triggered: {:.2}% < -{:.2}%", pnl * 100.0, signal.stop_loss * 100.0);
-            return Ok(true);
-        }
-        
-        if pnl > signal.take_profit {
-            info!("💰 Take profit triggered: {:.2}% > {:.2}%", pnl * 100.0, signal.take_profit * 100.0);
-            return Ok(true);
-        }
-        
-        // 2. Momentum decay exit (if momentum is weakening while in profit)
-        if pnl > 0.003 && self.strategy.detect_momentum_decay(&prices) {
-            info!("📉 Momentum decay exit: Profit {:.2}% but momentum weakening", pnl * 100.0);
-            return Ok(true);
-        }
-        
-        // 3. RSI divergence exit (if RSI weakening while in profit)
-        // Calculate current RSI and momentum from price data
-        let price_values: Vec<f64> = prices.iter().map(|p| p.price).collect();
-        if let Some(rsi) = self.strategy.calculate_rsi(&price_values, 14) {
-            let price_momentum = self.strategy.calculate_price_momentum(&price_values).unwrap_or(0.0);
-            if self.strategy.should_exit_rsi_divergence(rsi, price_momentum, pnl) {
-                info!("📊 RSI divergence exit: RSI {:.1}, momentum {:.3}, profit {:.2}%", 
-                      rsi, price_momentum, pnl * 100.0);
-                return Ok(true);
-            }
-        }
-        
-        // 4. Time-based exit for small profits (if held too long with small profit)
-        let duration = Utc::now() - position.entry_time;
-        let max_hold_time_seconds = 1800; // 30 minutes max hold
-        
-        if duration.num_seconds() > max_hold_time_seconds && pnl > 0.002 {
-            info!("⏰ Time-based exit: Held {}s with {:.2}% profit", 
-                  duration.num_seconds(), pnl * 100.0);
-            return Ok(true);
-        }
-        
-        // 5. Small profit exit (if profit is small but stable)
-        if pnl > 0.005 && pnl < 0.01 {
-            // Check if price has been stable for last 5 minutes
-            let recent_prices = self.get_recent_prices(&prices, 300); // 5 minutes
-            if recent_prices.len() >= 5 {
-                let price_volatility = self.calculate_volatility(
-                    &recent_prices.iter().map(|p| p.price).collect::<Vec<f64>>(), 
-                    5
-                ).unwrap_or(0.0);
-                
-                if price_volatility < 0.005 { // Low volatility
-                    info!("🎯 Small profit exit: {:.2}% profit with low volatility {:.3}%", 
-                          pnl * 100.0, price_volatility * 100.0);
-                    return Ok(true);
-                }
-            }
-        }
-        
-        Ok(false)
-    }
-
     async fn check_database_health(&self) -> Result<bool> {
         let health_url = format!("{}/health", self.config.database_url);
         
@@ -1784,6 +965,438 @@ impl TradingEngine {
                 warn!("⚠️ Database health check error: {}", e);
                 Ok(false)
             }
+        }
+    }
+
+    async fn trading_cycle(&mut self) -> Result<()> {
+        // Step 1: Fetch price data
+        let prices = self.fetch_price_history().await?;
+        
+        if prices.is_empty() {
+            warn!("⚠️ No price data available");
+            return Ok(());
+        }
+
+        // Step 2: Fetch technical indicators
+        let consolidated_indicators = match self.fetch_technical_indicators().await {
+            Ok(indicators) => indicators,
+            Err(_) => {
+                // Fallback: calculate indicators from price data
+                let strategy_indicators = self.strategy.calculate_custom_indicators(&prices);
+                self.calculate_consolidated_indicators(&prices, &strategy_indicators)
+            }
+        };
+
+        // Step 3: Calculate strategy indicators
+        let strategy_indicators = self.strategy.calculate_custom_indicators(&prices);
+
+        // Step 3.5: Calculate and post consolidated technical indicators for dashboard
+        let consolidated_indicators = self.calculate_consolidated_indicators(&prices, &strategy_indicators);
+        if let Err(e) = self.post_consolidated_indicators(&consolidated_indicators).await {
+            warn!("Failed to post consolidated indicators: {}", e);
+        }
+
+        // Step 3.6: Post individual indicators for backward compatibility
+        if let Err(e) = self.post_all_indicators(&consolidated_indicators).await {
+            warn!("Failed to post individual indicators: {}", e);
+        }
+
+        // Step 4: Analyze and generate signal
+        let signal = self.strategy.analyze(&prices, &consolidated_indicators);
+        
+        // Step 4.1: Enhance signal with ML predictions
+        let enhanced_signal = match self.ml_strategy.enhance_signal(&signal, &prices, &strategy_indicators) {
+            Ok(enhanced) => {
+                if enhanced.signal_type != signal.signal_type || (enhanced.confidence - signal.confidence).abs() > 0.1 {
+                    info!("🤖 ML enhanced: {:?} ({}%) → {:?} ({}%)", 
+                          signal.signal_type, (signal.confidence * 100.0) as i32,
+                          enhanced.signal_type, (enhanced.confidence * 100.0) as i32);
+                }
+                enhanced
+            }
+            Err(e) => {
+                warn!("⚠️ ML enhancement failed: {} - using original signal", e);
+                signal
+            }
+        };
+
+        // Step 4.5: STRICT position validation (no cooldown needed)
+        let now = Utc::now();
+        
+        // CRITICAL: Double-check position state before any signal execution
+        let has_position = self.current_position.is_some();
+        
+        // STRICT RULE: No BUY signals if we already have a position
+        if enhanced_signal.signal_type == SignalType::Buy && has_position {
+            info!("🚫 BLOCKED: BUY signal - position already active");
+            
+            // Still post the signal to database for monitoring, but don't execute
+            if let Err(e) = self.post_trading_signal(&enhanced_signal).await {
+                warn!("Failed to post signal: {}", e);
+            }
+            
+            // Log the analysis but skip execution
+            self.log_analysis(&enhanced_signal, &prices, &consolidated_indicators);
+            return Ok(());
+        }
+        
+        // Step 4.6: Post trading signal to database
+        if let Err(e) = self.post_trading_signal(&enhanced_signal).await {
+            warn!("Failed to post signal: {}", e);
+        }
+
+        // Step 5: Execute trading logic
+        self.execute_signal(&enhanced_signal).await?;
+        
+        // Step 6: Log the analysis
+        self.log_analysis(&enhanced_signal, &prices, &consolidated_indicators);
+
+        Ok(())
+    }
+
+    async fn fetch_price_history(&self) -> Result<Vec<PriceFeed>> {
+        use urlencoding::encode;
+        // Try to fetch 1-minute candles first for better analysis
+        let candle_url = format!("{}/candles/{}/1m?limit=200", 
+                                self.config.database_url, 
+                                encode(&self.config.trading_pair));
+        
+        let response = self.client.get(&candle_url).send().await?;
+        let text = response.text().await?;
+        if text.trim().is_empty() {
+            warn!("Candle endpoint returned empty response");
+        }
+        let api_response: Result<crate::models::ApiResponse<Vec<crate::models::Candle>>, _> = serde_json::from_str(&text);
+        if let Ok(api_response) = api_response {
+            match api_response {
+                crate::models::ApiResponse { success: true, data: Some(candles), .. } => {
+                    if !candles.is_empty() {
+                        info!("📊 Using {} 1-minute candles for analysis", candles.len());
+                        
+                        let prices: Vec<PriceFeed> = candles.into_iter().map(|candle| PriceFeed {
+                            id: candle.id,
+                            source: "candle".to_string(),
+                            pair: candle.pair,
+                            price: candle.close,
+                            timestamp: candle.timestamp,
+                        }).collect();
+                        return Ok(prices);
+                    }
+                }
+                _ => {
+                    debug!("No candle data available, falling back to raw prices");
+                }
+            }
+        } else {
+            warn!("Failed to parse candle response as JSON");
+        }
+        // Fallback to raw price data if candles are not available
+        let url = format!("{}/prices/{}", self.config.database_url, encode(&self.config.trading_pair));
+        let response = self.client.get(&url).send().await?;
+        let text = response.text().await?;
+        if text.trim().is_empty() {
+            warn!("Price endpoint returned empty response");
+            return Ok(vec![]);
+        }
+        let api_response: Result<crate::models::ApiResponse<Vec<PriceFeed>>, _> = serde_json::from_str(&text);
+        match api_response {
+            Ok(crate::models::ApiResponse { success: true, data: Some(prices), .. }) => {
+                info!("📊 Using {} raw price records for analysis", prices.len());
+                Ok(prices)
+            }
+            Ok(crate::models::ApiResponse { success: false, error: Some(e), .. }) => {
+                Err(anyhow::anyhow!("API error: {}", e))
+            }
+            _ => {
+                Err(anyhow::anyhow!("Unexpected or invalid response format"))
+            }
+        }
+    }
+
+    async fn fetch_technical_indicators(&self) -> Result<TechnicalIndicators> {
+        use urlencoding::encode;
+        let url = format!(
+            "{}/indicators/{}?hours=24",
+            self.config.database_url,
+            encode(&self.config.trading_pair)
+        );
+
+        let response = self.client.get(&url).send().await?;
+        let text = response.text().await?;
+        if text.trim().is_empty() {
+            warn!("Technical indicators endpoint returned empty response");
+            return Err(anyhow!("Empty response from technical indicators endpoint"));
+        }
+        let api_response: Result<crate::models::ApiResponse<TechnicalIndicators>, _> = serde_json::from_str(&text);
+        match api_response {
+            Ok(crate::models::ApiResponse { success: true, data: Some(indicators), .. }) => {
+                Ok(indicators)
+            }
+            Ok(crate::models::ApiResponse { success: false, error: Some(e), .. }) => {
+                Err(anyhow!("Failed to fetch technical indicators: {}", e))
+            }
+            _ => {
+                Err(anyhow!("Unexpected response format"))
+            }
+        }
+    }
+
+    async fn execute_signal(&mut self, signal: &TradingSignal) -> Result<()> {
+        // Check for stop loss and take profit on existing positions
+        if let Some(position) = &self.current_position {
+            let pnl = self.calculate_pnl(signal.price, position);
+            let duration = (signal.timestamp - position.entry_time).num_seconds();
+            
+            // Stop loss: -2% loss
+            if pnl <= -0.02 {
+                info!("🛑 STOP LOSS triggered at ${:.4} | PnL: {:.2}%", 
+                      signal.price, pnl * 100.0);
+                match self.trading_executor.execute_signal(signal, Some(position.quantity)).await {
+                    Ok((true, _)) => {
+                        self.close_position(signal.price).await?;
+                        info!("✅ Stop loss executed: ${:.4} | PnL: {:.2}% | Duration: {}s", 
+                              signal.price, pnl * 100.0, duration);
+                    }
+                    Ok((false, _)) => {
+                        warn!("❌ Stop loss execution failed");
+                    }
+                    Err(e) => {
+                        warn!("❌ Stop loss execution error: {}", e);
+                    }
+                }
+                return Ok(());
+            }
+            
+            // Take profit: +1.5% gain
+            if pnl >= 0.015 {
+                info!("🎯 TAKE PROFIT triggered at ${:.4} | PnL: {:.2}%", 
+                      signal.price, pnl * 100.0);
+                match self.trading_executor.execute_signal(signal, Some(position.quantity)).await {
+                    Ok((true, _)) => {
+                        self.close_position(signal.price).await?;
+                        info!("✅ Take profit executed: ${:.4} | PnL: {:.2}% | Duration: {}s", 
+                              signal.price, pnl * 100.0, duration);
+                    }
+                    Ok((false, _)) => {
+                        warn!("❌ Take profit execution failed");
+                    }
+                    Err(e) => {
+                        warn!("❌ Take profit execution error: {}", e);
+                    }
+                }
+                return Ok(());
+            }
+            
+            // Time-based exit: Close position after 30 minutes
+            if duration > 1800 { // 30 minutes
+                info!("⏰ TIME EXIT triggered at ${:.4} | PnL: {:.2}% | Duration: {}s", 
+                      signal.price, pnl * 100.0, duration);
+                match self.trading_executor.execute_signal(signal, Some(position.quantity)).await {
+                    Ok((true, _)) => {
+                        self.close_position(signal.price).await?;
+                        info!("✅ Time exit executed: ${:.4} | PnL: {:.2}% | Duration: {}s", 
+                              signal.price, pnl * 100.0, duration);
+                    }
+                    Ok((false, _)) => {
+                        warn!("❌ Time exit execution failed");
+                    }
+                    Err(e) => {
+                        warn!("❌ Time exit execution error: {}", e);
+                    }
+                }
+                return Ok(());
+            }
+        }
+
+        match signal.signal_type {
+            SignalType::Buy => {
+                if self.current_position.is_none() {
+                    info!("🟢 BUY signal executing at ${:.4} ({}% confidence)", 
+                          signal.price, (signal.confidence * 100.0) as i32);
+                    match self.trading_executor.execute_signal(signal, None).await {
+                        Ok((true, quantity)) => {
+                            let actual_quantity = quantity.unwrap_or(1.0);
+                            self.open_position(signal.price, PositionType::Long, actual_quantity).await?;
+                            info!("✅ BUY executed: ${:.4} | Qty: {:.4}", 
+                                  signal.price, actual_quantity);
+                        }
+                        Ok((false, _)) => {
+                            warn!("❌ BUY signal execution failed");
+                        }
+                        Err(e) => {
+                            warn!("❌ BUY signal execution error: {}", e);
+                        }
+                    }
+                } else {
+                    warn!("🚫 BUY signal blocked - position already exists");
+                }
+            }
+            SignalType::Sell => {
+                if let Some(position) = &self.current_position {
+                    let pnl = self.calculate_pnl(signal.price, position);
+                    let entry_time = position.entry_time;
+                    info!("🔴 SELL signal executing at ${:.4} | PnL: {:.2}% ({}% confidence)", 
+                          signal.price, pnl * 100.0, (signal.confidence * 100.0) as i32);
+                    match self.trading_executor.execute_signal(signal, Some(position.quantity)).await {
+                        Ok((true, _)) => {
+                            let duration = (signal.timestamp - entry_time).num_seconds();
+                            self.close_position(signal.price).await?;
+                            info!("✅ SELL executed: ${:.4} | PnL: {:.2}% | Duration: {}s", 
+                                  signal.price, pnl * 100.0, duration);
+                        }
+                        Ok((false, _)) => {
+                            warn!("❌ SELL signal execution failed");
+                        }
+                        Err(e) => {
+                            warn!("❌ SELL signal execution error: {}", e);
+                        }
+                    }
+                } else {
+                    warn!("🚫 SELL signal blocked - no position to close");
+                }
+            }
+            SignalType::Hold => {
+                if let Some(position) = &self.current_position {
+                    let pnl = self.calculate_pnl(signal.price, position);
+                    let duration = (signal.timestamp - position.entry_time).num_seconds();
+                    if duration % 60 == 0 {
+                        info!("⏸️  HOLD | Position: ${:.4} | PnL: {:.2}% | Duration: {}s", 
+                              signal.price, pnl * 100.0, duration);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn open_position(&mut self, price: f64, position_type: PositionType, quantity: f64) -> Result<()> {
+        // Safety check: Ensure we don't already have a position
+        if self.current_position.is_some() {
+            warn!("🚫 SAFETY CHECK FAILED: Attempted to open position when one already exists!");
+            warn!("📊 Existing position: {:?} at ${:.4}", 
+                  self.current_position.as_ref().unwrap().position_type,
+                  self.current_position.as_ref().unwrap().entry_price);
+            warn!("🎯 Attempted to open: {:?} at ${:.4}", position_type, price);
+            return Err(anyhow!("Cannot open position - one already exists"));
+        }
+        
+        // Additional safety check: Check if there's already an open position in the database
+        match self.fetch_open_positions().await {
+            Ok(Some(existing_position)) => {
+                warn!("🚫 Database already has an open position: {:?} at ${:.4}", 
+                      existing_position.position_type, existing_position.entry_price);
+                warn!("🔄 Recovering existing position instead of creating new one");
+                self.current_position = Some(existing_position);
+                return Ok(());
+            }
+            Ok(None) => {
+                // No existing position, proceed with creation
+            }
+            Err(e) => {
+                warn!("⚠️ Failed to check for existing positions: {}", e);
+                // Continue anyway, but log the warning
+            }
+        }
+        
+        let log_type = position_type.clone();
+        let position = Position {
+            position_id: None,
+            entry_price: price,
+            entry_time: Utc::now(),
+            quantity, // Use the actual quantity received from the transaction
+            position_type,
+        };
+        
+        // Set the position in memory FIRST to prevent race conditions
+        self.current_position = Some(position.clone());
+        
+        // Now post position to database and get the position ID
+        match self.post_position(&position).await {
+            Ok(position_id) => {
+                // Update the position with the ID from database
+                if let Some(ref mut final_position) = &mut self.current_position {
+                    final_position.position_id = Some(position_id.clone());
+                }
+                
+                info!("📈 Opened {:?} position at ${:.4} with quantity {:.6}", log_type, price, quantity);
+                info!("🔒 Position safety check passed - no duplicate positions");
+                info!("🆔 Database position ID: {}", position_id);
+                Ok(())
+            }
+            Err(e) => {
+                // If database posting fails, roll back the in-memory position
+                error!("❌ Failed to post position to database: {}", e);
+                self.current_position = None;
+                Err(anyhow!("Database posting failed: {}", e))
+            }
+        }
+    }
+
+    async fn close_position(&mut self, price: f64) -> Result<()> {
+        if let Some(position) = &self.current_position {
+            let pnl = self.calculate_pnl(price, position);
+            let duration = Utc::now() - position.entry_time;
+            
+            info!("📉 Closed position at ${:.4} - PnL: {:.2}% (Duration: {}s)", 
+                  price, pnl * 100.0, duration.num_seconds());
+            
+            // Close position in database - CRITICAL: Must succeed before clearing memory
+            match self.close_position_in_database(price).await {
+                Ok(_) => {
+                    info!("✅ Successfully closed position in database, clearing from memory");
+                    
+                    // Record ML trade with context
+                    let trade_result = TradeResult {
+                        entry_price: position.entry_price,
+                        exit_price: price,
+                        pnl,
+                        duration_seconds: duration.num_seconds(),
+                        entry_time: position.entry_time,
+                        exit_time: Utc::now(),
+                        success: pnl > 0.0,
+                    };
+                    
+                    // Get market context for ML recording
+                    let prices = match self.fetch_price_history().await {
+                        Ok(prices) => prices,
+                        Err(e) => {
+                            warn!("⚠️ Failed to fetch prices for ML context: {}", e);
+                            vec![]
+                        }
+                    };
+                    
+                    let (market_regime, trend_strength) = self.analyze_market_regime(&prices);
+                    let volatility = self.calculate_volatility(&prices.iter().map(|p| p.price).collect::<Vec<f64>>(), 20).unwrap_or(0.02);
+                    
+                    // Record ML trade with context
+                    self.ml_strategy.record_trade_with_context(
+                        trade_result, 
+                        &self.config.trading_pair, 
+                        market_regime.as_str(), 
+                        trend_strength, 
+                        volatility
+                    ).await;
+                    
+                    self.current_position = None;
+                }
+                Err(e) => {
+                    error!("❌ CRITICAL: Failed to close position in database: {}", e);
+                    error!("🚫 Keeping position in memory to prevent inconsistency");
+                    error!("🔄 Position will be retried on next cycle");
+                    return Err(anyhow!("Database close failed: {}", e));
+                }
+            }
+        } else {
+            warn!("⚠️  Attempted to close position but no position in memory");
+        }
+        
+        Ok(())
+    }
+
+    fn calculate_pnl(&self, current_price: f64, position: &Position) -> f64 {
+        match position.position_type {
+            PositionType::Long => (current_price - position.entry_price) / position.entry_price,
+            PositionType::Short => (position.entry_price - current_price) / position.entry_price,
         }
     }
 } 

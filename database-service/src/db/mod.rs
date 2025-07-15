@@ -1,5 +1,5 @@
 use crate::error::{DatabaseServiceError, Result};
-use crate::models::{BalanceSnapshot, PriceFeed, Wallet};
+use crate::models::{BalanceSnapshot, PriceFeed, Wallet, MLTradeHistory, MLTradeStats};
 use chrono::{DateTime, Utc};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool, Row};
 use tracing::{info, error, warn};
@@ -98,8 +98,6 @@ impl Database {
                 price REAL NOT NULL,
                 timestamp DATETIME NOT NULL,
                 reasoning TEXT,
-                take_profit REAL,
-                stop_loss REAL,
                 executed BOOLEAN DEFAULT FALSE,
                 created_at DATETIME NOT NULL
             )
@@ -222,6 +220,29 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
+        // Create ml_trade_history table for ML learning persistence
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS ml_trade_history (
+                id TEXT PRIMARY KEY,
+                pair TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                exit_price REAL NOT NULL,
+                pnl REAL NOT NULL,
+                duration_seconds INTEGER NOT NULL,
+                entry_time DATETIME NOT NULL,
+                exit_time DATETIME NOT NULL,
+                success BOOLEAN NOT NULL,
+                market_regime TEXT NOT NULL,
+                trend_strength REAL NOT NULL,
+                volatility REAL NOT NULL,
+                created_at DATETIME NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         // Create indexes for better performance
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_balance_snapshots_wallet_id ON balance_snapshots(wallet_id)")
             .execute(&self.pool)
@@ -293,6 +314,108 @@ impl Database {
 
         info!("Enhanced database schema initialized successfully");
         Ok(())
+    }
+
+    pub async fn store_ml_trade_history(&self, trade: &MLTradeHistory) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO ml_trade_history (
+                id, pair, entry_price, exit_price, pnl, duration_seconds,
+                entry_time, exit_time, success, market_regime, trend_strength,
+                volatility, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&trade.id)
+        .bind(&trade.pair)
+        .bind(trade.entry_price)
+        .bind(trade.exit_price)
+        .bind(trade.pnl)
+        .bind(trade.duration_seconds)
+        .bind(&trade.entry_time)
+        .bind(&trade.exit_time)
+        .bind(trade.success)
+        .bind(&trade.market_regime)
+        .bind(trade.trend_strength)
+        .bind(trade.volatility)
+        .bind(&trade.created_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_ml_trade_history(&self, pair: &str, limit: Option<i32>) -> Result<Vec<MLTradeHistory>> {
+        let limit = limit.unwrap_or(50);
+        
+        let rows = sqlx::query(
+            r#"
+            SELECT id, pair, entry_price, exit_price, pnl, duration_seconds,
+                   entry_time, exit_time, success, market_regime, trend_strength,
+                   volatility, created_at
+            FROM ml_trade_history 
+            WHERE pair = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(pair)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let trades = rows.into_iter().map(|row| {
+            MLTradeHistory {
+                id: row.try_get("id").unwrap_or_default(),
+                pair: row.try_get("pair").unwrap_or_default(),
+                entry_price: row.try_get("entry_price").unwrap_or_default(),
+                exit_price: row.try_get("exit_price").unwrap_or_default(),
+                pnl: row.try_get("pnl").unwrap_or_default(),
+                duration_seconds: row.try_get("duration_seconds").unwrap_or_default(),
+                entry_time: row.try_get("entry_time").unwrap_or_default(),
+                exit_time: row.try_get("exit_time").unwrap_or_default(),
+                success: row.try_get("success").unwrap_or_default(),
+                market_regime: row.try_get("market_regime").unwrap_or_default(),
+                trend_strength: row.try_get("trend_strength").unwrap_or_default(),
+                volatility: row.try_get("volatility").unwrap_or_default(),
+                created_at: row.try_get("created_at").unwrap_or_default(),
+            }
+        }).collect();
+
+        Ok(trades)
+    }
+
+    pub async fn get_ml_trade_stats(&self, pair: &str) -> Result<MLTradeStats> {
+        let row = sqlx::query(
+            r#"
+            SELECT 
+                COUNT(*) as total_trades,
+                SUM(CASE WHEN success THEN 1 ELSE 0 END) as winning_trades,
+                AVG(pnl) as avg_pnl,
+                AVG(CASE WHEN success THEN pnl ELSE NULL END) as avg_win,
+                AVG(CASE WHEN NOT success THEN pnl ELSE NULL END) as avg_loss
+            FROM ml_trade_history 
+            WHERE pair = ?
+            "#,
+        )
+        .bind(pair)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let total_trades: i64 = row.try_get("total_trades")?;
+        let winning_trades: i64 = row.try_get("winning_trades")?;
+        let win_rate = if total_trades > 0 { winning_trades as f64 / total_trades as f64 } else { 0.0 };
+        let avg_pnl: f64 = row.try_get("avg_pnl")?;
+        let avg_win: Option<f64> = row.try_get("avg_win").ok();
+        let avg_loss: Option<f64> = row.try_get("avg_loss").ok();
+
+        Ok(MLTradeStats {
+            total_trades: total_trades as usize,
+            win_rate,
+            avg_pnl,
+            avg_win: avg_win.unwrap_or(0.0),
+            avg_loss: avg_loss.unwrap_or(0.0),
+        })
     }
 
     pub async fn create_wallet(&self, address: &str) -> Result<Wallet> {
@@ -608,9 +731,9 @@ impl Database {
             r#"
             INSERT INTO trading_signals (
                 id, pair, signal_type, confidence, price, timestamp,
-                reasoning, take_profit, stop_loss, executed, created_at
+                reasoning, executed, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
@@ -620,8 +743,6 @@ impl Database {
         .bind(signal.price)
         .bind(&now)
         .bind(&signal.reasoning)
-        .bind(signal.take_profit)
-        .bind(signal.stop_loss)
         .bind(false) // executed
         .bind(&now)
         .execute(&self.pool)
@@ -635,8 +756,6 @@ impl Database {
             price: signal.price,
             timestamp: now,
             reasoning: signal.reasoning.clone(),
-            take_profit: signal.take_profit,
-            stop_loss: signal.stop_loss,
             executed: false,
             created_at: now,
         })
@@ -646,7 +765,7 @@ impl Database {
         let rows = sqlx::query(
             r#"
             SELECT id, pair, signal_type, confidence, price, timestamp,
-                   reasoning, take_profit, stop_loss, executed, created_at
+                   reasoning, executed, created_at
             FROM trading_signals
             WHERE pair = ?
             ORDER BY timestamp DESC
@@ -668,8 +787,6 @@ impl Database {
                 price: row.try_get("price").unwrap_or_default(),
                 timestamp: row.try_get("timestamp").unwrap_or_default(),
                 reasoning: row.try_get("reasoning").ok(),
-                take_profit: row.try_get("take_profit").ok(),
-                stop_loss: row.try_get("stop_loss").ok(),
                 executed: row.try_get("executed").unwrap_or_default(),
                 created_at: row.try_get("created_at").unwrap_or_default(),
             })
@@ -682,7 +799,7 @@ impl Database {
         let rows = sqlx::query(
             r#"
             SELECT id, pair, signal_type, confidence, price, timestamp,
-                   reasoning, take_profit, stop_loss, executed, created_at
+                   reasoning, executed, created_at
             FROM trading_signals
             ORDER BY timestamp DESC
             LIMIT ?
@@ -702,8 +819,6 @@ impl Database {
                 price: row.try_get("price").unwrap_or_default(),
                 timestamp: row.try_get("timestamp").unwrap_or_default(),
                 reasoning: row.try_get("reasoning").ok(),
-                take_profit: row.try_get("take_profit").ok(),
-                stop_loss: row.try_get("stop_loss").ok(),
                 executed: row.try_get("executed").unwrap_or_default(),
                 created_at: row.try_get("created_at").unwrap_or_default(),
             })
@@ -981,6 +1096,44 @@ impl Database {
             "#,
         )
         .bind(wallet_address)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let positions: Vec<crate::models::Position> = rows
+            .into_iter()
+            .map(|row| crate::models::Position {
+                id: row.try_get("id").unwrap_or_default(),
+                wallet_id: row.try_get("wallet_id").unwrap_or_default(),
+                pair: row.try_get("pair").unwrap_or_default(),
+                position_type: row.try_get("position_type").unwrap_or_default(),
+                entry_price: row.try_get("entry_price").unwrap_or_default(),
+                entry_time: row.try_get("entry_time").unwrap_or_default(),
+                quantity: row.try_get("quantity").unwrap_or_default(),
+                status: row.try_get("status").unwrap_or_default(),
+                exit_price: row.try_get("exit_price").ok(),
+                exit_time: row.try_get("exit_time").ok(),
+                pnl: row.try_get("pnl").ok(),
+                pnl_percent: row.try_get("pnl_percent").ok(),
+                duration_seconds: row.try_get("duration_seconds").ok(),
+                created_at: row.try_get("created_at").unwrap_or_default(),
+                updated_at: row.try_get("updated_at").unwrap_or_default(),
+                current_price: Some(row.try_get("entry_price").unwrap_or_default()),
+            })
+            .collect();
+
+        Ok(positions)
+    }
+
+    pub async fn get_all_positions(&self, limit: i64) -> Result<Vec<crate::models::Position>> {
+        // Same query as query_trades.sh - get all positions, not filtered by wallet
+        let rows = sqlx::query(
+            r#"
+            SELECT * FROM positions 
+            ORDER BY entry_time DESC
+            LIMIT ?
+            "#,
+        )
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
