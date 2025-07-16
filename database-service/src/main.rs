@@ -20,6 +20,7 @@ use crate::handlers::{
     get_candles, get_latest_candle, store_candle, get_ml_status,
     store_ml_trade_history, get_ml_trade_history, get_ml_trade_stats,
     get_advanced_indicators, get_ml_predictions, get_trading_analysis, get_market_summary,
+    store_neural_state, get_neural_state, get_neural_performance, get_neural_insights,
 };
 use axum::{
     routing::{get, post},
@@ -103,6 +104,11 @@ async fn main() -> Result<()> {
         .route("/ml/predictions/:pair", get(get_ml_predictions))
         .route("/trading_analysis/:pair", get(get_trading_analysis))
         .route("/market_summary/:pair", get(get_market_summary))
+        // Neural Network endpoints
+        .route("/neural/state", post(store_neural_state))
+        .route("/neural/state", get(get_neural_state))
+        .route("/neural/performance", get(get_neural_performance))
+        .route("/neural/insights", get(get_neural_insights))
         .layer(cors)
         .with_state(state);
     

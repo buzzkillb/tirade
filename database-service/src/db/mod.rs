@@ -1857,4 +1857,131 @@ impl Database {
             None => Ok(None),
         }
     }
-} 
+    
+    // Neural Network State Management
+    
+    pub async fn store_neural_state(&self, neural_state: &crate::handlers::NeuralState) -> Result<()> {
+        // First, create the neural_state table if it doesn't exist
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS neural_state (
+                id INTEGER PRIMARY KEY,
+                momentum_weight REAL NOT NULL,
+                rsi_weight REAL NOT NULL,
+                volatility_weight REAL NOT NULL,
+                pattern_weights TEXT NOT NULL,
+                hidden_state TEXT NOT NULL,
+                total_predictions INTEGER NOT NULL,
+                correct_predictions INTEGER NOT NULL,
+                learning_rate REAL NOT NULL,
+                last_updated DATETIME NOT NULL,
+                created_at DATETIME NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        
+        // Serialize vectors to JSON strings
+        let pattern_weights_json = serde_json::to_string(&neural_state.pattern_weights)
+            .map_err(|e| DatabaseServiceError::SerializationError(e.to_string()))?;
+        let hidden_state_json = serde_json::to_string(&neural_state.hidden_state)
+            .map_err(|e| DatabaseServiceError::SerializationError(e.to_string()))?;
+        
+        // Delete existing state (we only keep one neural state record)
+        sqlx::query("DELETE FROM neural_state")
+            .execute(&self.pool)
+            .await?;
+        
+        // Insert new neural state
+        sqlx::query(
+            r#"
+            INSERT INTO neural_state (
+                momentum_weight, rsi_weight, volatility_weight,
+                pattern_weights, hidden_state,
+                total_predictions, correct_predictions, learning_rate,
+                last_updated, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(neural_state.momentum_weight)
+        .bind(neural_state.rsi_weight)
+        .bind(neural_state.volatility_weight)
+        .bind(&pattern_weights_json)
+        .bind(&hidden_state_json)
+        .bind(neural_state.total_predictions as i64)
+        .bind(neural_state.correct_predictions as i64)
+        .bind(neural_state.learning_rate)
+        .bind(neural_state.last_updated)
+        .bind(Utc::now())
+        .execute(&self.pool)
+        .await?;
+        
+        info!("💾 Neural state stored successfully");
+        Ok(())
+    }
+    
+    pub async fn get_neural_state(&self) -> Result<Option<crate::handlers::NeuralState>> {
+        // Ensure table exists
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS neural_state (
+                id INTEGER PRIMARY KEY,
+                momentum_weight REAL NOT NULL,
+                rsi_weight REAL NOT NULL,
+                volatility_weight REAL NOT NULL,
+                pattern_weights TEXT NOT NULL,
+                hidden_state TEXT NOT NULL,
+                total_predictions INTEGER NOT NULL,
+                correct_predictions INTEGER NOT NULL,
+                learning_rate REAL NOT NULL,
+                last_updated DATETIME NOT NULL,
+                created_at DATETIME NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        
+        let row = sqlx::query(
+            r#"
+            SELECT momentum_weight, rsi_weight, volatility_weight,
+                   pattern_weights, hidden_state,
+                   total_predictions, correct_predictions, learning_rate,
+                   last_updated
+            FROM neural_state
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        
+        if let Some(row) = row {
+            // Deserialize JSON strings back to vectors
+            let pattern_weights_json: String = row.get("pattern_weights");
+            let hidden_state_json: String = row.get("hidden_state");
+            
+            let pattern_weights: Vec<f64> = serde_json::from_str(&pattern_weights_json)
+                .map_err(|e| DatabaseServiceError::SerializationError(e.to_string()))?;
+            let hidden_state: Vec<f64> = serde_json::from_str(&hidden_state_json)
+                .map_err(|e| DatabaseServiceError::SerializationError(e.to_string()))?;
+            
+            let neural_state = crate::handlers::NeuralState {
+                momentum_weight: row.get("momentum_weight"),
+                rsi_weight: row.get("rsi_weight"),
+                volatility_weight: row.get("volatility_weight"),
+                pattern_weights,
+                hidden_state,
+                total_predictions: row.get::<i64, _>("total_predictions") as u64,
+                correct_predictions: row.get::<i64, _>("correct_predictions") as u64,
+                learning_rate: row.get("learning_rate"),
+                last_updated: row.get("last_updated"),
+            };
+            
+            Ok(Some(neural_state))
+        } else {
+            Ok(None)
+        }
+    }
+}

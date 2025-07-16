@@ -5,7 +5,8 @@ use axum::{
 };
 use std::sync::Arc;
 use tracing::{info, warn, error};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use chrono::{DateTime, Utc};
 use crate::db::Database;
 use crate::models::{
     ApiResponse, CreateWalletRequest, StoreBalanceRequest, StorePriceRequest,
@@ -1368,4 +1369,195 @@ fn calculate_market_summary(prices: &[crate::models::PriceFeed]) -> crate::model
         risk_level,
         optimal_strategy,
     }
-} 
+}
+
+// Neural Network State Management Endpoints
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NeuralState {
+    pub momentum_weight: f64,
+    pub rsi_weight: f64,
+    pub volatility_weight: f64,
+    pub pattern_weights: Vec<f64>,
+    pub hidden_state: Vec<f64>,
+    pub total_predictions: u64,
+    pub correct_predictions: u64,
+    pub learning_rate: f64,
+    pub last_updated: DateTime<Utc>,
+}
+
+pub async fn store_neural_state(
+    State(db): State<Arc<Database>>,
+    Json(payload): Json<NeuralState>,
+) -> std::result::Result<Json<ApiResponse<NeuralState>>, StatusCode> {
+    match db.store_neural_state(&payload).await {
+        Ok(_) => {
+            let accuracy = if payload.total_predictions > 0 {
+                payload.correct_predictions as f64 / payload.total_predictions as f64
+            } else {
+                0.0
+            };
+            
+            info!("💾 Stored neural state: {} predictions, {:.1}% accuracy, LR: {}", 
+                  payload.total_predictions, accuracy * 100.0, payload.learning_rate);
+            info!("⚖️ Weights: M={:.3}, R={:.3}, V={:.3}", 
+                  payload.momentum_weight, payload.rsi_weight, payload.volatility_weight);
+            
+            Ok(Json(ApiResponse::success(payload)))
+        }
+        Err(e) => {
+            warn!("Failed to store neural state: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_neural_state(
+    State(db): State<Arc<Database>>,
+) -> std::result::Result<Json<ApiResponse<Option<NeuralState>>>, StatusCode> {
+    match db.get_neural_state().await {
+        Ok(neural_state) => {
+            if let Some(ref state) = neural_state {
+                let accuracy = if state.total_predictions > 0 {
+                    state.correct_predictions as f64 / state.total_predictions as f64
+                } else {
+                    0.0
+                };
+                info!("🧠 Retrieved neural state: {} predictions, {:.1}% accuracy", 
+                      state.total_predictions, accuracy * 100.0);
+            }
+            Ok(Json(ApiResponse::success(neural_state)))
+        }
+        Err(e) => {
+            warn!("Failed to get neural state: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_neural_performance(
+    State(db): State<Arc<Database>>,
+) -> std::result::Result<Json<ApiResponse<serde_json::Value>>, StatusCode> {
+    match db.get_neural_state().await {
+        Ok(Some(neural_state)) => {
+            let accuracy = if neural_state.total_predictions > 0 {
+                neural_state.correct_predictions as f64 / neural_state.total_predictions as f64
+            } else {
+                0.5
+            };
+            
+            // Calculate pattern confidence based on recent performance
+            let pattern_confidence = (accuracy * 0.8 + 0.1).min(1.0);
+            
+            // Determine market regime (simplified)
+            let market_regime = if accuracy > 0.7 { "Trending" } 
+                              else if accuracy < 0.4 { "Volatile" } 
+                              else { "Consolidating" };
+            
+            // Calculate risk level (inverse of accuracy)
+            let risk_level = (1.0 - accuracy * 0.6).max(0.2);
+            
+            let performance = serde_json::json!({
+                "accuracy": accuracy,
+                "pattern_confidence": pattern_confidence,
+                "market_regime": market_regime,
+                "risk_level": risk_level,
+                "total_predictions": neural_state.total_predictions,
+                "learning_rate": neural_state.learning_rate,
+                "neural_status": "active",
+                "weights": {
+                    "momentum": neural_state.momentum_weight,
+                    "rsi": neural_state.rsi_weight,
+                    "volatility": neural_state.volatility_weight
+                },
+                "last_updated": neural_state.last_updated
+            });
+            
+            Ok(Json(ApiResponse::success(performance)))
+        }
+        Ok(None) => {
+            // Return default values if no neural state exists
+            let default_performance = serde_json::json!({
+                "accuracy": 0.5,
+                "pattern_confidence": 0.5,
+                "market_regime": "Unknown",
+                "risk_level": 0.5,
+                "total_predictions": 0,
+                "learning_rate": 0.01,
+                "neural_status": "initializing",
+                "weights": {
+                    "momentum": 0.3,
+                    "rsi": 0.4,
+                    "volatility": 0.3
+                },
+                "last_updated": chrono::Utc::now()
+            });
+            
+            Ok(Json(ApiResponse::success(default_performance)))
+        }
+        Err(e) => {
+            warn!("Failed to get neural performance: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn get_neural_insights(
+    State(db): State<Arc<Database>>,
+) -> std::result::Result<Json<ApiResponse<serde_json::Value>>, StatusCode> {
+    match db.get_neural_state().await {
+        Ok(Some(neural_state)) => {
+            let accuracy = if neural_state.total_predictions > 0 {
+                neural_state.correct_predictions as f64 / neural_state.total_predictions as f64
+            } else {
+                0.5
+            };
+            
+            // Generate insights based on neural state
+            let price_direction = if neural_state.momentum_weight > neural_state.rsi_weight { 0.15 } else { -0.05 };
+            let volatility_forecast = (neural_state.volatility_weight * 0.7).min(1.0);
+            let optimal_position_size = (accuracy * 0.8 + 0.2).min(1.0);
+            
+            let reasoning = format!(
+                "Neural network with {:.1}% accuracy from {} predictions. {} weight dominates ({}), suggesting {} market conditions. Risk assessment: {} based on volatility weight of {:.3}.",
+                accuracy * 100.0,
+                neural_state.total_predictions,
+                if neural_state.momentum_weight > neural_state.rsi_weight { "Momentum" } else { "RSI" },
+                if neural_state.momentum_weight > neural_state.rsi_weight { neural_state.momentum_weight } else { neural_state.rsi_weight },
+                if price_direction > 0.0 { "bullish" } else { "bearish" },
+                if volatility_forecast > 0.5 { "elevated" } else { "moderate" },
+                neural_state.volatility_weight
+            );
+            
+            let insights = serde_json::json!({
+                "price_direction": price_direction,
+                "price_direction_confidence": accuracy,
+                "volatility_forecast": volatility_forecast,
+                "volatility_confidence": accuracy * 0.8,
+                "optimal_position_size": optimal_position_size,
+                "position_confidence": accuracy * 0.9,
+                "reasoning": reasoning
+            });
+            
+            Ok(Json(ApiResponse::success(insights)))
+        }
+        Ok(None) => {
+            // Return default insights if no neural state exists
+            let default_insights = serde_json::json!({
+                "price_direction": 0.0,
+                "price_direction_confidence": 0.5,
+                "volatility_forecast": 0.5,
+                "volatility_confidence": 0.5,
+                "optimal_position_size": 0.5,
+                "position_confidence": 0.5,
+                "reasoning": "Neural network is initializing. No learned patterns available yet. Starting with default balanced approach."
+            });
+            
+            Ok(Json(ApiResponse::success(default_insights)))
+        }
+        Err(e) => {
+            warn!("Failed to get neural insights: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
