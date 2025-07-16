@@ -90,6 +90,9 @@ pub struct Trade {
     pub timestamp: DateTime<Utc>,
     pub status: String,
     pub created_at: DateTime<Utc>,
+    // Added for multiwallet support
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wallet_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

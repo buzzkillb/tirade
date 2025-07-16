@@ -221,9 +221,45 @@ pub async fn get_jupiter_quote(args: &Args, config: &Config) -> Result<JupiterQu
         .unwrap_or(&Vec::new())
         .clone();
     
+    // Calculate actual execution price from Jupiter amounts
+    let execution_price = if args.direction == "usdc-to-sol" {
+        // For BUY: Price = USDC spent / SOL received
+        let usdc_amount = input_amount.parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
+        let sol_amount = output_amount.parse::<f64>().unwrap_or(0.0) / 1_000_000_000.0;
+        if sol_amount > 0.0 { 
+            usdc_amount / sol_amount 
+        } else { 
+            0.0 
+        }
+    } else {
+        // For SELL: Price = USDC received / SOL spent
+        let sol_amount = input_amount.parse::<f64>().unwrap_or(0.0) / 1_000_000_000.0;
+        let usdc_amount = output_amount.parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
+        if sol_amount > 0.0 { 
+            usdc_amount / sol_amount 
+        } else { 
+            0.0 
+        }
+    };
+    
+    info!("📊 Jupiter execution price: ${:.4} per SOL (direction: {})", execution_price, args.direction);
+    info!("📊 Input: {} | Output: {} | Price Impact: {:.2}%", 
+          if args.direction == "usdc-to-sol" { 
+              format!("${:.2} USDC", input_amount.parse::<f64>().unwrap_or(0.0) / 1_000_000.0)
+          } else { 
+              format!("{:.6} SOL", input_amount.parse::<f64>().unwrap_or(0.0) / 1_000_000_000.0)
+          },
+          if args.direction == "usdc-to-sol" { 
+              format!("{:.6} SOL", output_amount.parse::<f64>().unwrap_or(0.0) / 1_000_000_000.0)
+          } else { 
+              format!("${:.2} USDC", output_amount.parse::<f64>().unwrap_or(0.0) / 1_000_000.0)
+          },
+          price_impact * 100.0);
+    
     Ok(JupiterQuote {
         input_amount,
         output_amount,
+        execution_price,
         price_impact,
         routes,
         quote_data,

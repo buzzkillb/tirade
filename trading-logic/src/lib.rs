@@ -3,4 +3,7 @@ pub mod models;
 pub mod strategy;
 pub mod trading_executor;
 pub mod trading_engine;
-pub mod ml_strategy; 
+pub mod ml_strategy;
+pub mod database_service;
+pub mod position_manager;
+pub mod signal_processor; 

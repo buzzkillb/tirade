@@ -4,6 +4,9 @@ mod strategy;
 mod trading_engine;
 mod trading_executor;
 mod ml_strategy;
+mod database_service;
+mod position_manager;
+mod signal_processor;
 
 use anyhow::Result;
 use tracing::info;

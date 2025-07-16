@@ -25,6 +25,7 @@ pub struct Args {
 pub struct JupiterQuote {
     pub input_amount: String,
     pub output_amount: String,
+    pub execution_price: f64,  // Actual execution price from Jupiter
     pub price_impact: f64,
     #[allow(dead_code)]
     pub routes: Vec<Value>,

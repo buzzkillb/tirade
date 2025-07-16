@@ -346,7 +346,7 @@ impl Database {
     }
 
     pub async fn get_ml_trade_history(&self, pair: &str, limit: Option<i32>) -> Result<Vec<MLTradeHistory>> {
-        let limit = limit.unwrap_or(50);
+        let limit = limit.unwrap_or(200);  // Increased default for multiwallet ML learning
         
         let rows = sqlx::query(
             r#"
@@ -832,11 +832,15 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
 
-        // Get wallet by address
-        let wallet = self.get_wallet_by_address(&request.wallet_address).await?;
-        let wallet = wallet.ok_or_else(|| {
-            DatabaseServiceError::NotFound("Wallet not found".to_string())
-        })?;
+        // Get wallet by address, create if it doesn't exist
+        let wallet = match self.get_wallet_by_address(&request.wallet_address).await? {
+            Some(wallet) => wallet,
+            None => {
+                // Create wallet if it doesn't exist
+                info!("Creating new wallet for address: {}", request.wallet_address);
+                self.create_wallet(&request.wallet_address).await?
+            }
+        };
 
         sqlx::query(
             r#"
@@ -1336,9 +1340,11 @@ impl Database {
     pub async fn get_all_active_positions(&self) -> Result<Vec<crate::models::Position>> {
         let rows = sqlx::query(
             r#"
-            SELECT * FROM positions 
-            WHERE status = 'open'
-            ORDER BY created_at DESC
+            SELECT p.*, w.address as wallet_address 
+            FROM positions p
+            LEFT JOIN wallets w ON p.wallet_id = w.id
+            WHERE p.status = 'open'
+            ORDER BY p.created_at DESC
             "#,
         )
         .fetch_all(&self.pool)
@@ -1355,6 +1361,20 @@ impl Database {
             let exit_price: Option<f64> = row.try_get("exit_price").ok();
             let pnl: Option<f64> = row.try_get("pnl").ok();
             let pnl_percent: Option<f64> = row.try_get("pnl_percent").ok();
+            let wallet_id: String = row.try_get("wallet_id").unwrap_or_default();
+            let wallet_address: Option<String> = row.try_get("wallet_address").ok();
+            
+            // Create a wallet identifier for display (use first 6 characters of address)
+            let wallet_display = if let Some(addr) = wallet_address {
+                // Use first 6 characters of wallet address for display
+                if addr.len() > 6 {
+                    format!("{}...", &addr[..6])
+                } else {
+                    addr
+                }
+            } else {
+                format!("Wallet_{}", wallet_id)
+            };
             
             // For open positions, get the current market price to calculate unrealized PnL
             let current_price = if status == "open" {
@@ -1395,7 +1415,7 @@ impl Database {
             
             positions.push(crate::models::Position {
                 id: row.try_get("id").unwrap_or_default(),
-                wallet_id: row.try_get("wallet_id").unwrap_or_default(),
+                wallet_id: wallet_display, // Use wallet display instead of raw wallet_id
                 pair,
                 position_type,
                 entry_price,
@@ -1421,20 +1441,23 @@ impl Database {
         let rows = sqlx::query(
             r#"
             SELECT 
-                id,
-                pair,
-                position_type,
-                entry_price,
-                exit_price,
-                quantity,
-                entry_time,
-                exit_time,
-                created_at,
-                status,
-                pnl,
-                pnl_percent
-            FROM positions 
-            ORDER BY entry_time DESC
+                p.id,
+                p.pair,
+                p.position_type,
+                p.entry_price,
+                p.exit_price,
+                p.quantity,
+                p.entry_time,
+                p.exit_time,
+                p.created_at,
+                p.status,
+                p.pnl,
+                p.pnl_percent,
+                p.wallet_id,
+                w.address as wallet_address
+            FROM positions p
+            LEFT JOIN wallets w ON p.wallet_id = w.id
+            ORDER BY p.entry_time DESC
             LIMIT ?
             "#,
         )
@@ -1455,6 +1478,22 @@ impl Database {
             let status: String = row.try_get("status").unwrap_or_default();
             let pnl: f64 = row.try_get("pnl").unwrap_or_default();
             let pnl_percent: f64 = row.try_get("pnl_percent").unwrap_or_default();
+            let wallet_id: Option<String> = row.try_get("wallet_id").ok();
+            let wallet_address: Option<String> = row.try_get("wallet_address").ok();
+            
+            // Create a wallet identifier for display (use first 6 characters of address)
+            let wallet_display = if let Some(addr) = wallet_address {
+                // Use first 6 characters of wallet address for display
+                if addr.len() > 6 {
+                    format!("{}...", &addr[..6])
+                } else {
+                    addr
+                }
+            } else if let Some(id) = &wallet_id {
+                format!("Wallet_{}", id)
+            } else {
+                "Unknown".to_string()
+            };
             
             // Create BUY trade (entry) - always exists
             let buy_trade = crate::models::Trade {
@@ -1467,6 +1506,7 @@ impl Database {
                 timestamp: entry_time,
                 status: if status == "open" { "open".to_string() } else { "completed".to_string() },
                 created_at: entry_time,
+                wallet_id: Some(wallet_display.clone()),
             };
             
             trades.push(buy_trade);
@@ -1483,6 +1523,7 @@ impl Database {
                     timestamp: exit_time,
                     status: "completed".to_string(),
                     created_at: exit_time,
+                    wallet_id: Some(wallet_display),
                 };
                 trades.push(sell_trade);
             }

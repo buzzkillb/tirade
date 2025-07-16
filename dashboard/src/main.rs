@@ -25,6 +25,8 @@ pub struct Trade {
     pub timestamp: DateTime<Utc>,
     pub status: String,
     pub created_at: DateTime<Utc>,
+    // Added for multiwallet support
+    pub wallet_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -301,6 +303,13 @@ async fn index() -> Result<HttpResponse> {
         .trade-quantity {
             font-size: 0.9rem;
             opacity: 0.8;
+        }
+
+        .trade-wallet {
+            font-size: 0.8rem;
+            opacity: 0.7;
+            color: #a0aec0;
+            margin-top: 2px;
         }
 
         .trade-time {
@@ -895,6 +904,7 @@ async fn index() -> Result<HttpResponse> {
                                 <div class="active-trade-item">
                                     <div class="trade-header">
                                         <b>${pos.position_type.toUpperCase()}</b> @ $${entryPrice.toFixed(2)}
+                                        ${pos.wallet_id ? `<span style="float: right; font-size: 0.8rem; opacity: 0.8;">🏦 ${pos.wallet_id}</span>` : ''}
                                     </div>
                                     <div class="trade-details">
                                         <div>Qty: ${quantity.toFixed(4)} SOL</div>
@@ -982,6 +992,7 @@ async fn index() -> Result<HttpResponse> {
                                     <div class="trade-type">${trade.trade_type.toUpperCase()}</div>
                                     <div class="trade-price">${formatPrice(trade.price)}</div>
                                     <div class="trade-quantity">${trade.quantity.toFixed(4)} SOL</div>
+                                    ${trade.wallet_id ? `<div class="trade-wallet">🏦 ${trade.wallet_id}</div>` : ''}
                                 </div>
                                 <div class="trade-time">
                                     <div>${formatTime(trade.timestamp)}</div>

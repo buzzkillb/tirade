@@ -17,6 +17,8 @@ pub struct TradingExecutor {
     solana_rpc_url: String,
     solana_private_key: String,
     transaction_binary_path: String,
+    wallet_index: usize,
+    wallet_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,10 +35,15 @@ pub struct TransactionResult {
     pub error: Option<String>,
     pub sol_change: Option<f64>,
     pub usdc_change: Option<f64>,
+    pub execution_price: Option<f64>,
 }
 
 impl TradingExecutor {
     pub fn new() -> Result<Self> {
+        Self::new_with_wallet(0, "Default".to_string(), None)
+    }
+
+    pub fn new_with_wallet(wallet_index: usize, wallet_name: String, private_key: Option<String>) -> Result<Self> {
         // Load .env from project root (two directories up from trading-logic)
         let project_root = std::env::current_dir()?;
         let env_path = if project_root.ends_with("trading-logic") {
@@ -75,8 +82,13 @@ impl TradingExecutor {
         let solana_rpc_url = env::var("SOLANA_RPC_URL")
             .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
 
-        let solana_private_key = env::var("SOLANA_PRIVATE_KEY")
-            .map_err(|_| anyhow!("SOLANA_PRIVATE_KEY not found in environment"))?;
+        // Use provided private key or fallback to environment variable
+        let solana_private_key = if let Some(key) = private_key {
+            key
+        } else {
+            env::var("SOLANA_PRIVATE_KEY")
+                .map_err(|_| anyhow!("SOLANA_PRIVATE_KEY not found in environment"))?
+        };
 
         // Determine transaction binary path - try environment variable first, then different locations
         let transaction_binary_path = if let Ok(env_path) = env::var("TRANSACTION_BINARY_PATH") {
@@ -114,10 +126,20 @@ impl TradingExecutor {
             solana_rpc_url,
             solana_private_key,
             transaction_binary_path,
+            wallet_index,
+            wallet_name,
         })
     }
 
-    pub async fn execute_signal(&self, signal: &TradingSignal, sell_quantity: Option<f64>) -> Result<(bool, Option<f64>)> {
+    pub fn get_wallet_index(&self) -> usize {
+        self.wallet_index
+    }
+
+    pub fn get_wallet_name(&self) -> &str {
+        &self.wallet_name
+    }
+
+    pub async fn execute_signal(&self, signal: &TradingSignal, sell_quantity: Option<f64>) -> Result<(bool, Option<f64>, Option<f64>)> {
         // Check if trading execution is enabled
         if !self.enable_execution {
             info!("🔄 Paper trading mode - signal would be executed: {:?} at ${:.4}", 
@@ -125,14 +147,14 @@ impl TradingExecutor {
             
             // In paper trading mode, simulate the transaction with dry-run
             let success = self.simulate_trade(signal).await?;
-            return Ok((success, None)); // No quantity for paper trading
+            return Ok((success, None, None)); // No quantity or execution price for paper trading
         }
 
         // Check confidence threshold
         if signal.confidence < self.min_confidence_threshold {
             warn!("⚠️  Signal confidence ({:.1}%) below threshold ({:.1}%) - skipping execution", 
                   signal.confidence * 100.0, self.min_confidence_threshold * 100.0);
-            return Ok((false, None));
+            return Ok((false, None, None));
         }
 
         // Get current wallet balance
@@ -140,18 +162,18 @@ impl TradingExecutor {
         
         match signal.signal_type {
             SignalType::Buy => {
-                let sol_quantity = self.execute_buy_signal(signal, &balance).await?;
+                let (sol_quantity, execution_price) = self.execute_buy_signal(signal, &balance).await?;
                 let success = sol_quantity.is_some();
-                Ok((success, sol_quantity))
+                Ok((success, sol_quantity, execution_price))
             }
             SignalType::Sell => {
                 // For sell signals, we need the exact quantity that was bought
-                let success = self.execute_sell_signal(signal, &balance, sell_quantity).await?;
-                Ok((success, None)) // No quantity needed for sell
+                let (success, execution_price) = self.execute_sell_signal(signal, &balance, sell_quantity).await?;
+                Ok((success, None, execution_price)) // No quantity needed for sell
             }
             SignalType::Hold => {
                 // Hold signals don't execute trades
-                Ok((false, None))
+                Ok((false, None, None))
             }
         }
     }
@@ -213,7 +235,7 @@ impl TradingExecutor {
         }
     }
 
-    async fn execute_buy_signal(&self, _signal: &TradingSignal, balance: &WalletBalance) -> Result<Option<f64>> {
+    async fn execute_buy_signal(&self, _signal: &TradingSignal, balance: &WalletBalance) -> Result<(Option<f64>, Option<f64>)> {
         info!("🟢 Executing BUY signal...");
         
         // Calculate position size based on USDC balance
@@ -221,7 +243,7 @@ impl TradingExecutor {
         
         if position_size_usdc < 1.0 {
             warn!("⚠️  Insufficient USDC balance for trade: ${:.2} USDC", balance.usdc_balance);
-            return Ok(None);
+            return Ok((None, None));
         }
 
         info!("💰 Using ${:.2} USDC for trade (${:.2} available)", position_size_usdc, balance.usdc_balance);
@@ -239,9 +261,9 @@ impl TradingExecutor {
             }
             if let (Some(sol_change), Some(usdc_change)) = (result.sol_change, result.usdc_change) {
                 info!("💱 Received {:.6} SOL for ${:.2} USDC", sol_change, usdc_change.abs());
-                return Ok(Some(sol_change));
+                return Ok((Some(sol_change), result.execution_price));
             }
-            Ok(None)
+            Ok((None, result.execution_price))
         } else {
             let error_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
             error!("❌ BUY trade failed: {}", error_msg);
@@ -249,13 +271,13 @@ impl TradingExecutor {
         }
     }
 
-    async fn execute_sell_signal(&self, _signal: &TradingSignal, balance: &WalletBalance, sell_quantity: Option<f64>) -> Result<bool> {
+    async fn execute_sell_signal(&self, _signal: &TradingSignal, balance: &WalletBalance, sell_quantity: Option<f64>) -> Result<(bool, Option<f64>)> {
         info!("🔴 Executing SELL signal...");
         
         // For sell signals, we need to check SOL balance
         if balance.sol_balance < 0.001 {
             warn!("⚠️  Insufficient SOL balance for trade: {:.6} SOL", balance.sol_balance);
-            return Ok(false);
+            return Ok((false, None));
         }
 
         // Use the exact quantity that was bought, not a percentage of current balance
@@ -291,7 +313,7 @@ impl TradingExecutor {
             if let (Some(sol_change), Some(usdc_change)) = (result.sol_change, result.usdc_change) {
                 info!("💱 Traded {:.6} SOL for ${:.2} USDC", sol_change.abs(), usdc_change);
             }
-            Ok(true)
+            Ok((true, result.execution_price))
         } else {
             let error_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
             error!("❌ SELL trade failed: {}", error_msg);
@@ -358,6 +380,7 @@ impl TradingExecutor {
                 error: Some(stderr.to_string()),
                 sol_change: None,
                 usdc_change: None,
+                execution_price: None,
             })
         }
     }
@@ -366,8 +389,9 @@ impl TradingExecutor {
         let mut signature = None;
         let mut sol_change = None;
         let mut usdc_change = None;
+        let mut execution_price = None;
         
-        info!("🔍 Parsing transaction output for SOL/USDC changes...");
+        info!("🔍 Parsing transaction output for SOL/USDC changes and execution price...");
         
         for line in output.lines() {
             info!("🔍 Parsing line: '{}'", line.trim());
@@ -375,17 +399,29 @@ impl TradingExecutor {
             if line.contains("Transaction Signature:") || line.contains("Signature:") {
                 signature = line.split(':').nth(1).map(|s| s.trim().to_string());
                 info!("📝 Found signature: {:?}", signature);
-            } else if line.contains("SOL:") && line.contains("(received)") {
-                // Look for pattern like "  SOL: 0.123456 SOL (received)"
+            } else if line.contains("Jupiter Execution Price:") {
+                // Look for pattern like "  Jupiter Execution Price: $150.1234 per SOL"
+                if let Some(price_str) = line.split("$").nth(1) {
+                    if let Some(num_str) = price_str.split(" per SOL").next() {
+                        let parsed = num_str.trim().parse::<f64>();
+                        execution_price = parsed.ok();
+                        info!("💰 Found execution price: {:?} (parsed from '{}')", execution_price, num_str.trim());
+                    }
+                }
+            } else if line.contains("SOL:") && (line.contains("(received)") || line.contains("(spent)")) {
+                // Look for pattern like "  SOL: 0.123456 SOL (received)" or "  SOL: 0.123456 SOL (spent)"
                 if let Some(change_str) = line.split("SOL:").nth(1) {
                     if let Some(num_str) = change_str.split("SOL").next() {
-                        let parsed = num_str.trim().parse::<f64>();
-                        sol_change = parsed.ok();
+                        let mut change = num_str.trim().parse::<f64>().unwrap_or(0.0);
+                        if line.contains("(spent)") {
+                            change = -change; // Make spent amounts negative
+                        }
+                        sol_change = Some(change);
                         info!("🟢 Found SOL change: {:?} (parsed from '{}')", sol_change, num_str.trim());
                     }
                 }
             } else if line.contains("USDC:") && (line.contains("(spent)") || line.contains("(received)")) {
-                // Look for pattern like "  USDC: 100.00 USDC (spent)"
+                // Look for pattern like "  USDC: 100.00 USDC (spent)" or "  USDC: 100.00 USDC (received)"
                 if let Some(change_str) = line.split("USDC:").nth(1) {
                     if let Some(num_str) = change_str.split("USDC").next() {
                         let mut change = num_str.trim().parse::<f64>().unwrap_or(0.0);
@@ -399,7 +435,8 @@ impl TradingExecutor {
             }
         }
         
-        info!("📊 Parsing results - SOL: {:?}, USDC: {:?}, Signature: {:?}", sol_change, usdc_change, signature);
+        info!("📊 Parsing results - SOL: {:?}, USDC: {:?}, Execution Price: {:?}, Signature: {:?}", 
+              sol_change, usdc_change, execution_price, signature);
         
         Ok(TransactionResult {
             success: true,
@@ -407,6 +444,7 @@ impl TradingExecutor {
             error: None,
             sol_change,
             usdc_change,
+            execution_price,
         })
     }
 

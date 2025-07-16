@@ -92,16 +92,27 @@ async fn main() -> Result<(), TransactionError> {
     info!("  USDC: {:.2} USDC", new_usdc_balance);
     info!("");
     info!("CHANGES:");
-    info!("  SOL: {:.6} SOL (received)", sol_change);
-    info!("  USDC: {:.2} USDC (spent)", usdc_change.abs());
+    if sol_change > 0.0 {
+        info!("  SOL: {:.6} SOL (received)", sol_change);
+    } else {
+        info!("  SOL: {:.6} SOL (spent)", sol_change.abs());
+    }
+    if usdc_change > 0.0 {
+        info!("  USDC: {:.2} USDC (received)", usdc_change);
+    } else {
+        info!("  USDC: {:.2} USDC (spent)", usdc_change.abs());
+    }
+    info!("");
+    info!("EXECUTION PRICE:");
+    info!("  Jupiter Execution Price: ${:.4} per SOL", quote.execution_price);
     info!("");
     info!("JUPITER QUOTE vs ACTUAL:");
     let quoted_sol = quote.output_amount.parse::<f64>().unwrap_or(0.0) / 1_000_000_000.0;
     info!("  Quoted SOL: {:.6} SOL", quoted_sol);
-    info!("  Actual SOL: {:.6} SOL", sol_change);
+    info!("  Actual SOL: {:.6} SOL", sol_change.abs());
     info!("  Difference: {:.6} SOL ({:.4}%)", 
-          sol_change - quoted_sol, 
-          ((sol_change - quoted_sol) / quoted_sol * 100.0));
+          sol_change.abs() - quoted_sol, 
+          ((sol_change.abs() - quoted_sol) / quoted_sol * 100.0));
     
     Ok(())
 }

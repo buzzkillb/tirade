@@ -359,8 +359,8 @@ impl MLStrategy {
     pub fn record_trade(&mut self, trade_result: TradeResult) {
         self.recent_trades.push_back(trade_result.clone());
         
-        // Keep only last 50 trades
-        if self.recent_trades.len() > 50 {
+        // Keep only last 200 trades (increased for multiwallet learning)
+        if self.recent_trades.len() > 200 {
             self.recent_trades.pop_front();
         }
         
@@ -371,8 +371,8 @@ impl MLStrategy {
         // Add to memory
         self.recent_trades.push_back(trade_result.clone());
         
-        // Keep only last 50 trades
-        if self.recent_trades.len() > 50 {
+        // Keep only last 200 trades (increased for multiwallet learning)
+        if self.recent_trades.len() > 200 {
             self.recent_trades.pop_front();
         }
         
@@ -407,7 +407,8 @@ impl MLStrategy {
     }
 
     pub async fn load_trade_history(&mut self, pair: &str) -> Result<()> {
-        let url = format!("{}/ml/trades/{}?limit=50", self.database_url, pair);
+        // Increased from 50 to 200 for better ML learning with multiwallet
+        let url = format!("{}/ml/trades/{}?limit=200", self.database_url, pair);
         
         match self.db_client.get(&url).send().await {
             Ok(response) => {
