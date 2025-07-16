@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOL Trading Terminal</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'JetBrains Mono', monospace;
+            background: #0a0a0a;
+            color: #00ff41;
+            overflow-x: hidden;
+            line-height: 1.4;
+        }
+        
+        .terminal {
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%);
+            min-height: 100vh;
+            padding: 20px;
+            position: relative;
+        }
+        
+        .terminal::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                repeating-linear-gradient(
+                    0deg,
+                    transparent,
+                    transparent 2px,
+                    rgba(0, 255, 65, 0.03) 2px,
+                    rgba(0, 255, 65, 0.03) 4px
+                );
+            pointer-events: none;
+            z-index: 1;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 2;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            border: 2px solid #00ff41;
+            padding: 20px;
+            background: rgba(0, 255, 65, 0.05);
+            border-radius: 8px;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            text-shadow: 0 0 10px #00ff41;
+            margin-bottom: 10px;
+        }
+        
+        .header .subtitle {
+            font-size: 1rem;
+            opacity: 0.8;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .panel {
+            background: rgba(0, 255, 65, 0.05);
+            border: 1px solid #00ff41;
+            border-radius: 8px;
+            padding: 20px;
+            backdrop-filter: blur(5px);
+        }
+        
+        .panel h2 {
+            color: #00ff41;
+            font-size: 1.2rem;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            border-bottom: 1px solid #00ff41;
+            padding-bottom: 5px;
+        }
+        
+        .price-display {
+            font-size: 2rem;
+            font-weight: bold;
+            text-align: center;
+            color: #00ff41;
+            text-shadow: 0 0 15px #00ff41;
+            margin: 20px 0;
+        }
+        
+        .pnl {
+            font-size: 1.5rem;
+            text-align: center;
+            margin: 15px 0;
+        }
+        
+        .pnl.positive {
+            color: #00ff41;
+            text-shadow: 0 0 10px #00ff41;
+        }
+        
+        .pnl.negative {
+            color: #ff4444;
+            text-shadow: 0 0 10px #ff4444;
+        }
+        
+        .trade-item, .signal-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(0, 255, 65, 0.2);
+            font-size: 0.9rem;
+        }
+        
+        .trade-item:last-child, .signal-item:last-child {
+            border-bottom: none;
+        }
+        
+        .wallet {
+            font-family: 'JetBrains Mono', monospace;
+            color: #00ccff;
+        }
+        
+        .buy {
+            color: #00ff41;
+        }
+        
+        .sell {
+            color: #ff6b6b;
+        }
+        
+        .neural-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 10px;
+        }
+        
+        .stat {
+            text-align: center;
+            padding: 10px;
+            background: rgba(0, 255, 65, 0.1);
+            border-radius: 4px;
+        }
+        
+        .stat-value {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #00ff41;
+        }
+        
+        .stat-label {
+            font-size: 0.8rem;
+            opacity: 0.8;
+            margin-top: 5px;
+        }
+        
+        .signal-strength {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+        
+        .signal-strong {
+            background: rgba(0, 255, 65, 0.3);
+            color: #00ff41;
+        }
+        
+        .signal-medium {
+            background: rgba(255, 255, 0, 0.3);
+            color: #ffff00;
+        }
+        
+        .signal-weak {
+            background: rgba(255, 100, 100, 0.3);
+            color: #ff6464;
+        }
+        
+        .timestamp {
+            font-size: 0.8rem;
+            opacity: 0.7;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            opacity: 0.7;
+        }
+        
+        .status-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #00ff41;
+            box-shadow: 0 0 10px #00ff41;
+            animation: pulse 2s infinite;
+            z-index: 10;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        
+        /* Mobile Responsive */
+        @media (max-width: 768px) {
+            .terminal {
+                padding: 10px;
+            }
+            
+            .header h1 {
+                font-size: 1.8rem;
+            }
+            
+            .grid {
+                grid-template-columns: 1fr;
+                gap: 15px;
+            }
+            
+            .panel {
+                padding: 15px;
+            }
+            
+            .price-display {
+                font-size: 1.5rem;
+            }
+            
+            .neural-stats {
+                grid-template-columns: 1fr;
+                gap: 10px;
+            }
+            
+            .trade-item, .signal-item {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 5px;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .header h1 {
+                font-size: 1.5rem;
+            }
+            
+            .price-display {
+                font-size: 1.3rem;
+            }
+            
+            .panel {
+                padding: 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="terminal">
+        <div class="status-indicator"></div>
+        <div class="container">
+            <div class="header">
+                <h1>◉ SOL TRADING TERMINAL ◉</h1>
+                <div class="subtitle">Neural Enhanced Trading System v2.0</div>
+            </div>
+            
+            <div class="grid">
+                <!-- SOL Price Panel -->
+                <div class="panel">
+                    <h2>▶ SOL Price</h2>
+                    <div class="price-display" id="sol-price">Loading...</div>
+                    <div class="timestamp" id="price-updated">Last updated: --</div>
+                </div>
+                
+                <!-- PnL Panel -->
+                <div class="panel">
+                    <h2>▶ Total P&L</h2>
+                    <div class="pnl" id="total-pnl">Loading...</div>
+                </div>
+            </div>
+            
+            <!-- Active Trades Panel -->
+            <div class="panel full-width">
+                <h2>▶ Active Trades</h2>
+                <div id="active-trades" class="loading">Loading active trades...</div>
+            </div>
+            
+            <!-- Neural Network Panel -->
+            <div class="panel full-width">
+                <h2>▶ Neural Network Status</h2>
+                <div class="neural-stats" id="neural-stats">
+                    <div class="stat">
+                        <div class="stat-value" id="model-accuracy">--</div>
+                        <div class="stat-label">Model Accuracy</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="prediction-confidence">--</div>
+                        <div class="stat-label">Prediction Confidence</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="learning-rate">--</div>
+                        <div class="stat-label">Learning Rate</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="total-predictions">--</div>
+                        <div class="stat-label">Total Predictions</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Trading Signals Panel -->
+            <div class="panel full-width">
+                <h2>▶ Recent Trading Signals</h2>
+                <div id="trading-signals" class="loading">Loading signals...</div>
+            </div>
+            
+            <!-- Recent Trades Panel -->
+            <div class="panel full-width">
+                <h2>▶ Recent Trades</h2>
+                <div id="recent-trades" class="loading">Loading trades...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let updateInterval;
+        
+        function formatPrice(price) {
+            return `$${price.toFixed(4)}`;
+        }
+        
+        function formatPnL(pnl) {
+            const sign = pnl >= 0 ? '+' : '';
+            return `${sign}$${pnl.toFixed(2)}`;
+        }
+        
+        function formatTimestamp(timestamp) {
+            return new Date(timestamp).toLocaleTimeString();
+        }
+        
+        function getSignalStrengthClass(strength) {
+            if (strength >= 0.7) return 'signal-strong';
+            if (strength >= 0.4) return 'signal-medium';
+            return 'signal-weak';
+        }
+        
+        async function updateDashboard() {
+            try {
+                const response = await fetch('/api/dashboard');
+                const data = await response.json();
+                
+                // Update SOL price
+                document.getElementById('sol-price').textContent = formatPrice(data.sol_price);
+                document.getElementById('price-updated').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+                
+                // Update PnL
+                const pnlElement = document.getElementById('total-pnl');
+                pnlElement.textContent = formatPnL(data.pnl);
+                pnlElement.className = `pnl ${data.pnl >= 0 ? 'positive' : 'negative'}`;
+                
+                // Update active trades
+                const activeTradesElement = document.getElementById('active-trades');
+                if (data.active_trades.length === 0) {
+                    activeTradesElement.innerHTML = '<div class="loading">No active trades</div>';
+                } else {
+                    activeTradesElement.innerHTML = data.active_trades.map(trade => `
+                        <div class="trade-item">
+                            <div>
+                                <span class="wallet">${trade.wallet}</span>
+                                <span class="buy">BUY ${formatPrice(trade.buy_price)}</span>
+                            </div>
+                            <div>
+                                <span>${trade.sol_amount.toFixed(4)} SOL</span>
+                                <span class="${trade.current_pnl >= 0 ? 'buy' : 'sell'}">${formatPnL(trade.current_pnl)}</span>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+                
+                // Update neural network stats
+                document.getElementById('model-accuracy').textContent = `${(data.neural_info.model_accuracy * 100).toFixed(1)}%`;
+                document.getElementById('prediction-confidence').textContent = `${(data.neural_info.prediction_confidence * 100).toFixed(1)}%`;
+                document.getElementById('learning-rate').textContent = data.neural_info.learning_rate.toFixed(6);
+                document.getElementById('total-predictions').textContent = data.neural_info.total_predictions.toLocaleString();
+                
+                // Update trading signals
+                const signalsElement = document.getElementById('trading-signals');
+                if (data.recent_signals.length === 0) {
+                    signalsElement.innerHTML = '<div class="loading">No recent signals</div>';
+                } else {
+                    signalsElement.innerHTML = data.recent_signals.map(signal => `
+                        <div class="signal-item">
+                            <div>
+                                <span class="${signal.signal_type.toLowerCase() === 'buy' ? 'buy' : 'sell'}">${signal.signal_type.toUpperCase()}</span>
+                                <span>${signal.pair}</span>
+                            </div>
+                            <div>
+                                <span class="signal-strength ${getSignalStrengthClass(signal.strength)}">${(signal.strength * 100).toFixed(0)}%</span>
+                                <span class="timestamp">${formatTimestamp(signal.timestamp)}</span>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+                
+                // Update recent trades
+                const tradesElement = document.getElementById('recent-trades');
+                if (data.recent_trades.length === 0) {
+                    tradesElement.innerHTML = '<div class="loading">No recent trades</div>';
+                } else {
+                    tradesElement.innerHTML = data.recent_trades.map(trade => `
+                        <div class="trade-item">
+                            <div>
+                                <span class="${trade.trade_type.toLowerCase() === 'buy' ? 'buy' : 'sell'}">${trade.trade_type.toUpperCase()}</span>
+                                <span class="wallet">${trade.wallet}</span>
+                            </div>
+                            <div>
+                                <span>${formatPrice(trade.price)}</span>
+                                <span>${trade.amount.toFixed(4)} SOL</span>
+                                <span class="timestamp">${formatTimestamp(trade.timestamp)}</span>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+                
+            } catch (error) {
+                console.error('Failed to update dashboard:', error);
+            }
+        }
+        
+        // Initial load
+        updateDashboard();
+        
+        // Update every 5 seconds
+        updateInterval = setInterval(updateDashboard, 5000);
+        
+        // Handle visibility change to pause/resume updates
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) {
+                clearInterval(updateInterval);
+            } else {
+                updateDashboard();
+                updateInterval = setInterval(updateDashboard, 5000);
+            }
+        });
+    </script>
+</body>
+</html>

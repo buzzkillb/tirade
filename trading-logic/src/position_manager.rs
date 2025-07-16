@@ -44,6 +44,10 @@ impl PositionManager {
         self.positions.get(wallet_index).map_or(false, |p| p.is_some())
     }
 
+    pub fn get_active_position_count(&self) -> usize {
+        self.positions.iter().filter(|p| p.is_some()).count()
+    }
+
     pub fn clear_position(&mut self, wallet_index: usize) {
         if wallet_index < self.positions.len() {
             self.positions[wallet_index] = None;

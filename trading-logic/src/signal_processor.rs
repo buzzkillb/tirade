@@ -29,6 +29,15 @@ impl SignalProcessor {
     ) -> Result<()> {
         info!("🟢 Processing BUY signal with staggered rotation across {} wallets", executors.len());
         
+        // Multi-wallet mode: Check if ANY wallet has an active position
+        if executors.len() > 1 {
+            let active_positions = position_manager.get_active_position_count();
+            if active_positions > 0 {
+                info!("🚫 Multi-wallet mode: {} active position(s) detected, skipping new BUY signal to prevent over-exposure", active_positions);
+                return Ok(());
+            }
+        }
+        
         // STAGGERED STRATEGY: Use round-robin rotation to select next wallet
         let next_wallet_index = self.get_next_buy_wallet(executors.len(), position_manager);
         
@@ -327,7 +336,18 @@ impl SignalProcessor {
             return None;
         }
 
-        // Start from the next wallet after the last one used
+        // Single wallet mode: Skip round robin and use wallet 0 directly
+        if wallet_count == 1 {
+            if !position_manager.has_position(0) {
+                info!("💰 Single wallet mode: Using wallet 1 for BUY (round robin disabled)");
+                return Some(0);
+            } else {
+                info!("⏳ Single wallet mode: Wallet 1 has open position, skipping BUY");
+                return None;
+            }
+        }
+
+        // Multi-wallet mode: Use round-robin rotation
         let start_index = match self.last_buy_wallet_index {
             Some(last_index) => (last_index + 1) % wallet_count,
             None => 0, // First time, start with wallet 0
@@ -337,7 +357,7 @@ impl SignalProcessor {
         for i in 0..wallet_count {
             let wallet_index = (start_index + i) % wallet_count;
             if !position_manager.has_position(wallet_index) {
-                info!("🔄 Rotation selected wallet {} for next BUY", wallet_index + 1);
+                info!("🔄 Multi-wallet rotation selected wallet {} for next BUY", wallet_index + 1);
                 return Some(wallet_index);
             }
         }
