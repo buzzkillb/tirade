@@ -234,9 +234,11 @@ impl DatabaseService {
         let create_config_request = serde_json::json!({
             "name": format!("{}_config", trading_pair),
             "pair": trading_pair,
-            "min_confidence_threshold": min_confidence * 100.0,
-            "position_size_percent": position_size * 100.0,
-            "slippage_tolerance_percent": slippage * 100.0,
+            "min_data_points": 200,
+            "check_interval_secs": 30,
+            "take_profit_percent": 2.0,
+            "stop_loss_percent": 1.4,
+            "max_position_size": position_size * 100.0,
         });
 
         let url = format!("{}/configs", self.base_url);
@@ -250,8 +252,10 @@ impl DatabaseService {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
             warn!("Failed to post trading config: {} - {}", status, error_text);
+            warn!("Request payload: {}", serde_json::to_string_pretty(&create_config_request).unwrap_or_else(|_| "Failed to serialize".to_string()));
+            warn!("Request URL: {}", url);
         } else {
-            debug!("Posted trading config for {}", trading_pair);
+            info!("✅ Posted trading config for {} successfully", trading_pair);
         }
         
         Ok(())

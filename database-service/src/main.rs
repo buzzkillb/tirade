@@ -16,6 +16,7 @@ use crate::handlers::{
     get_position_history, get_all_positions, create_trading_config, get_trading_config,
     get_open_positions_by_pair, update_position_status,
     get_signals_count, get_active_positions_dashboard, get_recent_trades, get_performance_metrics,
+    get_wallet_performance_metrics,
     get_candles, get_latest_candle, store_candle, get_ml_status,
     store_ml_trade_history, get_ml_trade_history, get_ml_trade_stats,
     get_advanced_indicators, get_ml_predictions, get_trading_analysis, get_market_summary,
@@ -88,6 +89,7 @@ async fn main() -> Result<()> {
         .route("/positions/active", get(get_active_positions_dashboard))
         .route("/trades/recent", get(get_recent_trades))
         .route("/performance/metrics", get(get_performance_metrics))
+        .route("/performance/wallets", get(get_wallet_performance_metrics))
         .route("/configs", post(create_trading_config))
         .route("/configs/:name", get(get_trading_config))
         .route("/candles/:pair/:interval", get(get_candles))

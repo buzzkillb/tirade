@@ -1174,7 +1174,7 @@ impl Database {
 
         sqlx::query(
             r#"
-            INSERT INTO trading_configs (
+            INSERT OR REPLACE INTO trading_configs (
                 id, name, pair, min_data_points, check_interval_secs,
                 take_profit_percent, stop_loss_percent, max_position_size,
                 enabled, created_at, updated_at
@@ -1666,6 +1666,92 @@ impl Database {
         });
 
         Ok(metrics)
+    }
+
+    pub async fn get_wallet_performance_metrics(&self) -> Result<serde_json::Value> {
+        // Get per-wallet performance metrics
+        let wallet_metrics_rows = sqlx::query(
+            r#"
+            SELECT 
+                w.address as wallet_address,
+                w.id as wallet_id,
+                COUNT(CASE WHEN p.status = 'closed' THEN 1 END) as total_trades,
+                COUNT(CASE WHEN p.status = 'closed' AND p.pnl > 0 THEN 1 END) as winning_trades,
+                COUNT(CASE WHEN p.status = 'closed' AND p.pnl <= 0 THEN 1 END) as losing_trades,
+                COALESCE(SUM(CASE WHEN p.status = 'closed' THEN p.pnl END), 0.0) as total_pnl,
+                COALESCE(SUM(CASE WHEN p.status = 'closed' THEN p.pnl_percent END), 0.0) as total_pnl_percent,
+                COALESCE(SUM(p.quantity * p.entry_price), 0.0) as total_volume,
+                COUNT(CASE WHEN p.status = 'open' THEN 1 END) as active_positions
+            FROM wallets w
+            LEFT JOIN positions p ON w.id = p.wallet_id
+            GROUP BY w.id, w.address
+            ORDER BY total_pnl DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut wallet_metrics = Vec::new();
+        
+        for row in wallet_metrics_rows {
+            let wallet_address: String = row.try_get("wallet_address")?;
+            let wallet_id: String = row.try_get("wallet_id")?;
+            let total_trades: i64 = row.try_get("total_trades")?;
+            let winning_trades: i64 = row.try_get("winning_trades")?;
+            let losing_trades: i64 = row.try_get("losing_trades")?;
+            let total_pnl: f64 = row.try_get("total_pnl")?;
+            let total_pnl_percent: f64 = row.try_get("total_pnl_percent")?;
+            let total_volume: f64 = row.try_get("total_volume")?;
+            let active_positions: i64 = row.try_get("active_positions")?;
+
+            // Calculate win rate
+            let win_rate = if total_trades > 0 {
+                (winning_trades as f64 / total_trades as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            // Calculate average trade PnL
+            let avg_trade_pnl = if total_trades > 0 {
+                total_pnl / total_trades as f64
+            } else {
+                0.0
+            };
+
+            // Create wallet display identifier (first 6 characters)
+            let wallet_display = if wallet_address.len() > 6 {
+                format!("{}...", &wallet_address[..6])
+            } else {
+                wallet_address.clone()
+            };
+
+            let wallet_metric = serde_json::json!({
+                "wallet_id": wallet_id,
+                "wallet_address": wallet_address,
+                "wallet_display": wallet_display,
+                "total_trades": total_trades,
+                "winning_trades": winning_trades,
+                "losing_trades": losing_trades,
+                "win_rate": win_rate,
+                "total_pnl": total_pnl,
+                "total_pnl_percent": total_pnl_percent,
+                "avg_trade_pnl": avg_trade_pnl,
+                "total_volume": total_volume,
+                "active_positions": active_positions
+            });
+
+            wallet_metrics.push(wallet_metric);
+        }
+
+        // Also get overall totals
+        let overall_metrics = self.get_performance_metrics().await?;
+
+        let result = serde_json::json!({
+            "overall": overall_metrics,
+            "wallets": wallet_metrics
+        });
+
+        Ok(result)
     }
 
     pub async fn store_candle(&self, pair: &str, interval: &str, open: f64, high: f64, low: f64, close: f64, volume: f64) -> Result<crate::models::Candle> {

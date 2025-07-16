@@ -83,6 +83,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/price", web::get().to(get_price))
             .route("/api/pnl", web::get().to(get_pnl))
             .route("/api/active_positions", web::get().to(get_active_positions))
+            .route("/api/wallet_performance", web::get().to(get_wallet_performance))
             .route("/api/market_analysis", web::get().to(get_market_analysis))
             .route("/api/signals", web::get().to(get_trading_signals))
             .route("/api/trades", web::get().to(get_trades))
@@ -396,6 +397,60 @@ async fn index() -> Result<HttpResponse> {
         }
         .pnl-negative {
             color: #f56565;
+        }
+
+        .wallet-performance-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .wallet-performance-card h2 {
+            color: white;
+        }
+        .wallet-performance-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .wallet-item {
+            background: rgba(255,255,255,0.08);
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+        }
+        .wallet-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            color: white;
+        }
+        .wallet-name {
+            font-weight: bold;
+            font-size: 1rem;
+            color: white;
+        }
+        .wallet-pnl {
+            font-weight: bold;
+            font-size: 1rem;
+        }
+        .wallet-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 8px;
+            font-size: 0.8rem;
+            color: white;
+        }
+        .wallet-stat {
+            text-align: center;
+            opacity: 0.9;
+        }
+        .wallet-stat-label {
+            display: block;
+            opacity: 0.7;
+            margin-bottom: 2px;
+        }
+        .wallet-stat-value {
+            font-weight: bold;
         }
 
         .signals-card {
@@ -737,6 +792,13 @@ async fn index() -> Result<HttpResponse> {
                 <div class="active-trades-list" id="active-trades-list"></div>
             </div>
 
+            <div class="card wallet-performance-card">
+                <h2>🏦 Wallet Performance</h2>
+                <div class="wallet-performance-list" id="wallet-performance-list">
+                    <div class="loading">Loading wallet metrics...</div>
+                </div>
+            </div>
+
             <div class="card market-analysis-card">
                 <h2>🧠 Market Analysis & ML (Simplified)</h2>
                 <div class="analysis-grid">
@@ -926,6 +988,52 @@ async fn index() -> Result<HttpResponse> {
                 });
         }
 
+        function updateWalletPerformance() {
+            fetch('/api/wallet_performance')
+                .then(response => response.json())
+                .then(data => {
+                    const listElem = document.getElementById('wallet-performance-list');
+                    if (data && data.wallets && data.wallets.length > 0) {
+                        listElem.innerHTML = data.wallets.map(wallet => {
+                            const pnlClass = wallet.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
+                            const pnlEmoji = wallet.total_pnl >= 0 ? '💰' : '💸';
+                            
+                            return `
+                                <div class="wallet-item">
+                                    <div class="wallet-header">
+                                        <div class="wallet-name">🏦 ${wallet.wallet_display}</div>
+                                        <div class="wallet-pnl ${pnlClass}">
+                                            ${pnlEmoji} $${Math.abs(wallet.total_pnl).toFixed(2)}
+                                        </div>
+                                    </div>
+                                    <div class="wallet-stats">
+                                        <div class="wallet-stat">
+                                            <span class="wallet-stat-label">Trades</span>
+                                            <span class="wallet-stat-value">${wallet.total_trades}</span>
+                                        </div>
+                                        <div class="wallet-stat">
+                                            <span class="wallet-stat-label">Win Rate</span>
+                                            <span class="wallet-stat-value">${wallet.win_rate.toFixed(1)}%</span>
+                                        </div>
+                                        <div class="wallet-stat">
+                                            <span class="wallet-stat-label">Active</span>
+                                            <span class="wallet-stat-value">${wallet.active_positions}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('');
+                    } else {
+                        listElem.innerHTML = '<div class="loading">No wallet data available</div>';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching wallet performance:', error);
+                    document.getElementById('wallet-performance-list').innerHTML = 
+                        '<div class="error">Error loading wallet performance</div>';
+                });
+        }
+
         function updateSignals() {
             fetch('/api/signals')
                 .then(response => response.json())
@@ -1060,6 +1168,7 @@ async fn index() -> Result<HttpResponse> {
         updatePrice();
         updatePosition();
         updateActiveTrades();
+        updateWalletPerformance();
         updateMarketAnalysis();
         updateSignals();
         updateTrades();
@@ -1069,6 +1178,7 @@ async fn index() -> Result<HttpResponse> {
             updatePrice();
             updatePosition();
             updateActiveTrades();
+            updateWalletPerformance();
             updateMarketAnalysis();
             updateSignals();
             updateTrades();
@@ -1240,6 +1350,32 @@ async fn get_trades(state: web::Data<Arc<AppState>>) -> Result<HttpResponse> {
         Err(_) => {
             Ok(HttpResponse::Ok().json(Vec::<Trade>::new()))
         }
+    }
+}
+
+async fn get_wallet_performance(state: web::Data<Arc<AppState>>) -> Result<HttpResponse> {
+    let url = format!("{}/performance/wallets", state.database_url);
+    match state.client.get(&url).send().await {
+        Ok(response) => {
+            if response.status().is_success() {
+                match response.json::<serde_json::Value>().await {
+                    Ok(data) => Ok(HttpResponse::Ok().json(data)),
+                    Err(_) => Ok(HttpResponse::Ok().json(serde_json::json!({
+                        "wallets": [],
+                        "overall": {}
+                    })))
+                }
+            } else {
+                Ok(HttpResponse::Ok().json(serde_json::json!({
+                    "wallets": [],
+                    "overall": {}
+                })))
+            }
+        }
+        Err(_) => Ok(HttpResponse::Ok().json(serde_json::json!({
+            "wallets": [],
+            "overall": {}
+        })))
     }
 }
 

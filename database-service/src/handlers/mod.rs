@@ -530,6 +530,21 @@ pub async fn get_performance_metrics(
     }
 }
 
+pub async fn get_wallet_performance_metrics(
+    State(db): State<Arc<Database>>,
+) -> std::result::Result<Json<ApiResponse<Value>>, StatusCode> {
+    match db.get_wallet_performance_metrics().await {
+        Ok(metrics) => {
+            info!("Retrieved wallet performance metrics");
+            Ok(Json(ApiResponse::success(metrics)))
+        }
+        Err(e) => {
+            warn!("Failed to get wallet performance metrics: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 pub async fn get_candles(
     State(db): State<Arc<Database>>,
     axum::extract::Path((pair, interval)): axum::extract::Path<(String, String)>,
