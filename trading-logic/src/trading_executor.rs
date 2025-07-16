@@ -327,6 +327,85 @@ impl TradingExecutor {
         direction: &str,
         dry_run: bool,
     ) -> Result<TransactionResult> {
+        let max_retries = 3;
+        let mut last_error = None;
+
+        for attempt in 1..=max_retries {
+            info!("🔄 Transaction attempt {}/{} for {} {}", attempt, max_retries, amount, direction);
+            
+            let result = self.execute_single_transaction_attempt(amount, direction, dry_run).await;
+            
+            match result {
+                Ok(transaction_result) => {
+                    if transaction_result.success {
+                        if attempt > 1 {
+                            info!("✅ Transaction succeeded on attempt {}/{}", attempt, max_retries);
+                        }
+                        return Ok(transaction_result);
+                    } else {
+                        // Transaction failed, check if we should retry
+                        if let Some(ref error) = transaction_result.error {
+                            if self.should_retry_transaction(error) && attempt < max_retries {
+                                let delay = 2u64.pow(attempt - 1); // Exponential backoff: 1s, 2s, 4s
+                                warn!("⚠️  Transaction failed (attempt {}/{}), retrying in {} seconds... Error: {}", 
+                                      attempt, max_retries, delay, error);
+                                tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
+                                last_error = Some(error.clone());
+                                continue;
+                            }
+                        }
+                        return Ok(transaction_result);
+                    }
+                }
+                Err(e) => {
+                    if attempt < max_retries {
+                        let delay = 2u64.pow(attempt - 1);
+                        warn!("⚠️  Transaction execution error (attempt {}/{}), retrying in {} seconds... Error: {}", 
+                              attempt, max_retries, delay, e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
+                        last_error = Some(e.to_string());
+                        continue;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        // All retries failed
+        error!("❌ All {} transaction attempts failed", max_retries);
+        Ok(TransactionResult {
+            success: false,
+            signature: None,
+            error: last_error,
+            sol_change: None,
+            usdc_change: None,
+            execution_price: None,
+        })
+    }
+
+    fn should_retry_transaction(&self, error: &str) -> bool {
+        // Retry on common Jupiter/Solana errors that are often temporary
+        let retryable_errors = [
+            "Transaction simulation failed",
+            "custom program error: 0x9ca", // Jupiter slippage error
+            "RPC response error",
+            "Network error",
+            "Timeout",
+            "Connection refused",
+            "Service unavailable",
+            "Internal server error",
+        ];
+        
+        retryable_errors.iter().any(|&retryable| error.contains(retryable))
+    }
+
+    async fn execute_single_transaction_attempt(
+        &self,
+        amount: f64,
+        direction: &str,
+        dry_run: bool,
+    ) -> Result<TransactionResult> {
         let slippage_bps = (self.slippage_tolerance * 10000.0) as u32;
         
         let mut cmd = Command::new(&self.transaction_binary_path);
