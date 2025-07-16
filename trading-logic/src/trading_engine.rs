@@ -123,7 +123,7 @@ impl TradingEngine {
 
         // Step 4: Generate and enhance signal
         let signal = self.strategy.analyze(&prices, &consolidated_indicators);
-        let enhanced_signal = self.enhance_signal_with_ml(signal, &prices, &strategy_indicators)?;
+        let enhanced_signal = self.enhance_signal_with_ml(signal, &prices, &strategy_indicators).await?;
 
         // Step 5: Post signal to database
         if let Err(e) = self.database_service.post_trading_signal(&enhanced_signal, &self.config.trading_pair).await {
@@ -174,18 +174,18 @@ impl TradingEngine {
         Ok(())
     }
 
-    fn enhance_signal_with_ml(&mut self, signal: TradingSignal, prices: &[PriceFeed], indicators: &crate::models::TradingIndicators) -> Result<TradingSignal> {
-        match self.ml_strategy.enhance_signal(&signal, prices, indicators) {
+    async fn enhance_signal_with_ml(&mut self, signal: TradingSignal, prices: &[PriceFeed], indicators: &crate::models::TradingIndicators) -> Result<TradingSignal> {
+        match self.ml_strategy.enhance_signal(&signal, prices, indicators).await {
             Ok(enhanced) => {
                 if enhanced.signal_type != signal.signal_type || (enhanced.confidence - signal.confidence).abs() > 0.1 {
-                    info!("🤖 ML enhanced: {:?} ({}%) → {:?} ({}%)", 
+                    info!("🧠 ML+Neural enhanced: {:?} ({}%) → {:?} ({}%)", 
                           signal.signal_type, (signal.confidence * 100.0) as i32,
                           enhanced.signal_type, (enhanced.confidence * 100.0) as i32);
                 }
                 Ok(enhanced)
             }
             Err(e) => {
-                warn!("⚠️ ML enhancement failed: {} - using original signal", e);
+                warn!("⚠️ ML+Neural enhancement failed: {} - using original signal", e);
                 Ok(signal)
             }
         }

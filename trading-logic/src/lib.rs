@@ -6,4 +6,5 @@ pub mod trading_engine;
 pub mod ml_strategy;
 pub mod database_service;
 pub mod position_manager;
-pub mod signal_processor; 
+pub mod signal_processor;
+pub mod neural_enhancement; 

@@ -1,5 +1,6 @@
 use crate::models::{PriceFeed, TradingSignal, SignalType};
 use crate::config::Config;
+use crate::neural_enhancement::{NeuralEnhancement, TradeOutcome};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc, Timelike};
 use serde::{Deserialize, Serialize};
@@ -36,7 +37,7 @@ pub enum MarketRegime {
     Unknown,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MLStrategy {
     config: Config,
     recent_trades: VecDeque<TradeResult>,
@@ -45,6 +46,10 @@ pub struct MLStrategy {
     max_position_size: f64,
     db_client: Client,
     database_url: String,
+    
+    // Neural network integration
+    neural_system: Option<NeuralEnhancement>,
+    neural_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +80,28 @@ impl MLStrategy {
             .parse::<f64>()
             .unwrap_or(0.9);
 
+        let neural_enabled = std::env::var("NEURAL_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse::<bool>()
+            .unwrap_or(true);
+
+        // Initialize neural system
+        let neural_system = if neural_enabled {
+            match NeuralEnhancement::new() {
+                Ok(system) => {
+                    info!("🧠 Neural Enhancement System initialized successfully");
+                    Some(system)
+                }
+                Err(e) => {
+                    warn!("⚠️ Failed to initialize neural system: {}", e);
+                    None
+                }
+            }
+        } else {
+            info!("🧠 Neural Enhancement System disabled by configuration");
+            None
+        };
+
         Self {
             config,
             recent_trades: VecDeque::new(),
@@ -83,10 +110,12 @@ impl MLStrategy {
             max_position_size,
             db_client: Client::new(),
             database_url: std::env::var("DATABASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string()),
+            neural_system,
+            neural_enabled,
         }
     }
 
-    pub fn enhance_signal(&mut self, signal: &TradingSignal, prices: &[PriceFeed], indicators: &crate::models::TradingIndicators) -> Result<TradingSignal> {
+    pub async fn enhance_signal(&mut self, signal: &TradingSignal, prices: &[PriceFeed], indicators: &crate::models::TradingIndicators) -> Result<TradingSignal> {
         if !self.ml_enabled {
             return Ok(signal.clone());
         }
@@ -146,6 +175,19 @@ impl MLStrategy {
         enhanced_signal.reasoning.push(format!("ML Consecutive Losses: {:.0}", prediction.consecutive_losses));
         enhanced_signal.reasoning.push(format!("ML Market Regime: {:?}", prediction.market_regime));
         enhanced_signal.reasoning.push(format!("ML Risk Score: {:.0}%", prediction.risk_score * 100.0));
+        
+        // 🧠 Neural Network Enhancement
+        if let Some(ref mut neural_system) = self.neural_system {
+            match neural_system.enhance_signal(&enhanced_signal, prices, indicators).await {
+                Ok(neural_enhanced_signal) => {
+                    enhanced_signal = neural_enhanced_signal;
+                    info!("🧠 Neural enhancement applied successfully");
+                }
+                Err(e) => {
+                    warn!("Neural signal enhancement failed: {}", e);
+                }
+            }
+        }
         
         Ok(enhanced_signal)
     }
@@ -356,7 +398,7 @@ impl MLStrategy {
         consecutive
     }
 
-    pub fn record_trade(&mut self, trade_result: TradeResult) {
+    pub async fn record_trade(&mut self, trade_result: TradeResult) {
         self.recent_trades.push_back(trade_result.clone());
         
         // Keep only last 200 trades (increased for multiwallet learning)
@@ -364,7 +406,25 @@ impl MLStrategy {
             self.recent_trades.pop_front();
         }
         
-        info!("🤖 ML Trade Recorded - PnL: {:.2}%, Success: {}", trade_result.pnl * 100.0, trade_result.success);
+        // 🧠 Neural Network Learning from trade result
+        if let Some(ref mut neural_system) = self.neural_system {
+            let trade_outcome = TradeOutcome {
+                entry_price: trade_result.entry_price,
+                exit_price: trade_result.exit_price,
+                pnl: trade_result.pnl,
+                success: trade_result.success,
+                timestamp: trade_result.exit_time,
+            };
+            
+            if let Err(e) = neural_system.learn_from_trade(&trade_outcome).await {
+                warn!("Neural learning from trade failed: {}", e);
+            }
+        }
+        
+        info!("🤖 ML+Neural Trade Recorded - PnL: {:.2}%, Success: {}, Neural: {}", 
+              trade_result.pnl * 100.0, 
+              trade_result.success,
+              self.neural_system.is_some());
     }
 
     pub async fn record_trade_with_context(&mut self, trade_result: TradeResult, pair: &str, market_regime: &str, trend_strength: f64, volatility: f64) {

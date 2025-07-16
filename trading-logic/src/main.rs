@@ -7,6 +7,7 @@ mod ml_strategy;
 mod database_service;
 mod position_manager;
 mod signal_processor;
+mod neural_enhancement;
 
 use anyhow::Result;
 use tracing::info;

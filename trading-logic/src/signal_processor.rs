@@ -302,7 +302,9 @@ impl SignalProcessor {
                                 exit_time: Utc::now(),
                                 success: actual_pnl > 0.0,
                             };
-                            ml_strategy.record_trade(trade_result);
+                            
+                            // Record trade for ML and neural learning
+                            ml_strategy.record_trade(trade_result).await;
                             
                             // Clear position
                             position_manager.clear_position(wallet_index);
