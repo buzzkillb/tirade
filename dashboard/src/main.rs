@@ -193,34 +193,61 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
         Err(_) => vec![],
     };
 
-    // Fetch recent trades
-    let recent_trades = match client.get(&format!("{}/trades/recent", database_url)).send().await {
+    // Fetch recent trades - get closed positions and create BUY/SELL pairs
+    let recent_trades = match client.get(&format!("{}/positions/all?limit=10", database_url)).send().await {
         Ok(response) => {
             if let Ok(api_response) = response.json::<serde_json::Value>().await {
                 if let Some(data) = api_response.get("data") {
-                    if let Some(trades) = data.as_array() {
-                        trades.iter().take(10).map(|trade| {
-                            let wallet = trade.get("wallet_address").and_then(|w| w.as_str()).unwrap_or("").to_string();
-                            let short_wallet = if wallet.len() > 8 { 
-                                format!("{}...{}", &wallet[..4], &wallet[wallet.len()-4..])
-                            } else { 
-                                wallet 
-                            };
-                            
-                            RecentTrade {
-                                trade_type: trade.get("position_type").and_then(|t| t.as_str()).unwrap_or("").to_string(),
-                                wallet: short_wallet,
-                                price: trade.get("exit_price").and_then(|p| p.as_f64())
-                                    .or_else(|| trade.get("entry_price").and_then(|p| p.as_f64()))
-                                    .unwrap_or(0.0),
-                                amount: trade.get("quantity").and_then(|a| a.as_f64()).unwrap_or(0.0),
-                                timestamp: trade.get("exit_time").and_then(|t| t.as_str())
-                                    .or_else(|| trade.get("entry_time").and_then(|t| t.as_str()))
-                                    .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+                    if let Some(positions) = data.as_array() {
+                        let mut trades = Vec::new();
+                        
+                        for position in positions.iter() {
+                            // Only process closed positions (have exit_price and exit_time)
+                            if let (Some(entry_price), Some(exit_price), Some(quantity), Some(entry_time), Some(exit_time)) = (
+                                position.get("entry_price").and_then(|p| p.as_f64()),
+                                position.get("exit_price").and_then(|p| p.as_f64()),
+                                position.get("quantity").and_then(|q| q.as_f64()),
+                                position.get("entry_time").and_then(|t| t.as_str()),
+                                position.get("exit_time").and_then(|t| t.as_str())
+                            ) {
+                                let wallet = position.get("wallet_address").and_then(|w| w.as_str()).unwrap_or("").to_string();
+                                let short_wallet = if wallet.len() > 8 { 
+                                    format!("{}...{}", &wallet[..4], &wallet[wallet.len()-4..])
+                                } else { 
+                                    wallet 
+                                };
+
+                                // Parse timestamps
+                                let entry_dt = DateTime::parse_from_rfc3339(entry_time).ok()
                                     .map(|dt| dt.with_timezone(&Utc))
-                                    .unwrap_or_else(|| Utc::now()),
+                                    .unwrap_or_else(|| Utc::now());
+                                let exit_dt = DateTime::parse_from_rfc3339(exit_time).ok()
+                                    .map(|dt| dt.with_timezone(&Utc))
+                                    .unwrap_or_else(|| Utc::now());
+
+                                // Add SELL trade (more recent)
+                                trades.push(RecentTrade {
+                                    trade_type: "SELL".to_string(),
+                                    wallet: short_wallet.clone(),
+                                    price: exit_price,
+                                    amount: quantity,
+                                    timestamp: exit_dt,
+                                });
+
+                                // Add BUY trade (older)
+                                trades.push(RecentTrade {
+                                    trade_type: "BUY".to_string(),
+                                    wallet: short_wallet,
+                                    price: entry_price,
+                                    amount: quantity,
+                                    timestamp: entry_dt,
+                                });
                             }
-                        }).collect()
+                        }
+                        
+                        // Sort by timestamp (newest first) and take top 10
+                        trades.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                        trades.into_iter().take(10).collect()
                     } else {
                         vec![]
                     }
