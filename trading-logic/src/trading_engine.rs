@@ -131,6 +131,7 @@ impl TradingEngine {
         }
 
         // Step 6: Process signal
+        info!("🔄 SIGNAL PROCESSING: Starting signal processing cycle");
         self.process_signal(&enhanced_signal, &prices, &strategy_indicators).await?;
 
         // Step 7: Log analysis
@@ -140,6 +141,20 @@ impl TradingEngine {
     }
 
     async fn process_signal(&mut self, signal: &TradingSignal, prices: &[PriceFeed], indicators: &crate::models::TradingIndicators) -> Result<()> {
+        // ALWAYS check exit conditions first, regardless of signal type
+        // This ensures profit/loss targets are evaluated every cycle
+        info!("🔍 CHECKING EXIT CONDITIONS: Before processing {:?} signal", signal.signal_type);
+        self.signal_processor.check_exit_conditions(
+            prices,
+            indicators,
+            &self.trading_executors,
+            &mut self.position_manager,
+            &self.database_service,
+            &mut self.ml_strategy,
+            &self.strategy,
+        ).await?;
+
+        // Then process new signals (only if no positions were closed above)
         match signal.signal_type {
             SignalType::Buy => {
                 self.signal_processor.handle_buy_signal(
@@ -150,25 +165,24 @@ impl TradingEngine {
                 ).await?;
             }
             SignalType::Sell => {
-                self.signal_processor.handle_sell_signal(
-                    signal,
-                    &self.trading_executors,
-                    &mut self.position_manager,
-                    &self.database_service,
-                    &mut self.ml_strategy,
-                ).await?;
+                // Check if any positions exist - if so, let only exit conditions handle exits
+                let active_positions = self.position_manager.get_active_position_count();
+                if active_positions > 0 {
+                    info!("🚫 SELL signal ignored: {} active position(s) - only exit conditions handle exits", active_positions);
+                    info!("💡 External SELL signals disabled when positions exist - smart exit strategy in control");
+                } else {
+                    info!("✅ SELL signal processed: No active positions, allowing external signal");
+                    self.signal_processor.handle_sell_signal(
+                        signal,
+                        &self.trading_executors,
+                        &mut self.position_manager,
+                        &self.database_service,
+                        &mut self.ml_strategy,
+                    ).await?;
+                }
             }
             SignalType::Hold => {
-                // Check for exit conditions on existing positions
-                self.signal_processor.check_exit_conditions(
-                    prices,
-                    indicators,
-                    &self.trading_executors,
-                    &mut self.position_manager,
-                    &self.database_service,
-                    &mut self.ml_strategy,
-                    &self.strategy,
-                ).await?;
+                // Exit conditions already checked above
             }
         }
         Ok(())
@@ -394,7 +408,7 @@ impl TradingEngine {
     }
 
     fn log_analysis(&self, signal: &TradingSignal, prices: &[PriceFeed]) {
-        if prices.is_empty() || signal.signal_type == SignalType::Hold {
+        if prices.is_empty() {
             return;
         }
 
@@ -407,8 +421,17 @@ impl TradingEngine {
             0.0
         };
 
-        info!("📊 Analysis: {:?} at ${:.4} | Change: {:.2}% | Conf: {:.0}%", 
-              signal.signal_type, current_price, price_change * 100.0, signal.confidence * 100.0);
+        // Log ALL signals including HOLD to see confidence levels
+        match signal.signal_type {
+            SignalType::Hold => {
+                info!("📊 Analysis: HOLD at ${:.4} | Change: {:.2}% | Conf: {:.0}% | Reason: Signal below threshold", 
+                      current_price, price_change * 100.0, signal.confidence * 100.0);
+            }
+            _ => {
+                info!("📊 Analysis: {:?} at ${:.4} | Change: {:.2}% | Conf: {:.0}%", 
+                      signal.signal_type, current_price, price_change * 100.0, signal.confidence * 100.0);
+            }
+        }
     }
 
     // Helper method to get wallet statistics

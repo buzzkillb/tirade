@@ -29,14 +29,8 @@ impl SignalProcessor {
     ) -> Result<()> {
         info!("🟢 Processing BUY signal with staggered rotation across {} wallets", executors.len());
         
-        // Multi-wallet mode: Check if ANY wallet has an active position
-        if executors.len() > 1 {
-            let active_positions = position_manager.get_active_position_count();
-            if active_positions > 0 {
-                info!("🚫 Multi-wallet mode: {} active position(s) detected, skipping new BUY signal to prevent over-exposure", active_positions);
-                return Ok(());
-            }
-        }
+        // Single position per wallet: Each wallet can have max 1 position
+        // Don't prevent other wallets from trading if one wallet has a position
         
         // STAGGERED STRATEGY: Use round-robin rotation to select next wallet
         let next_wallet_index = self.get_next_buy_wallet(executors.len(), position_manager);
@@ -219,7 +213,7 @@ impl SignalProcessor {
                             exit_time: signal.timestamp,
                             success: pnl > 0.0,
                         };
-                        ml_strategy.record_trade(trade_result);
+                        ml_strategy.record_trade(trade_result).await;
 
                         // Clear position from memory
                         position_manager.clear_position(wallet_index);
@@ -261,21 +255,52 @@ impl SignalProcessor {
     ) -> Result<()> {
         let current_price = prices.last().map(|p| p.price).unwrap_or(0.0);
         
+        info!("🔍 EXIT CONDITIONS CHECK: Current price ${:.4}", current_price);
+        
         // Check each position for exit conditions
         for (wallet_index, executor) in executors.iter().enumerate() {
             if let Some(position) = position_manager.get_position(wallet_index).cloned() {
                 let pnl = (current_price - position.entry_price) / position.entry_price;
+                let rsi = indicators.rsi_fast.unwrap_or(50.0);
+                let momentum_decay = strategy.detect_momentum_decay(prices);
                 
-                // Simple exit conditions (can be enhanced)
-                let should_exit = 
-                    pnl > 0.05 ||  // 5% profit
-                    pnl < -0.03 || // 3% loss
-                    strategy.detect_momentum_decay(prices) ||
-                    (indicators.rsi_fast.unwrap_or(50.0) > 70.0 && pnl > 0.01); // RSI overbought with profit
+                info!("📊 {} POSITION CHECK: Entry ${:.4} → Current ${:.4} = {:.2}% PnL", 
+                      executor.get_wallet_name(), position.entry_price, current_price, pnl * 100.0);
+                
+                // Detailed condition checking with individual logging
+                let rsi_overbought_condition = rsi > 70.0 && pnl > 0.008;
+                let momentum_decay_condition = momentum_decay && pnl > 0.008;
+                let take_profit_condition = pnl > 0.012;
+                let stop_loss_condition = pnl < -0.01;
+                
+                info!("🎯 EXIT CONDITION ANALYSIS for {}:", executor.get_wallet_name());
+                info!("   RSI Overbought Exit: RSI={:.1} > 70.0 && PnL={:.2}% > 0.8% = {}", 
+                      rsi, pnl * 100.0, rsi_overbought_condition);
+                info!("   Momentum Decay Exit: Decay={} && PnL={:.2}% > 0.8% = {}", 
+                      momentum_decay, pnl * 100.0, momentum_decay_condition);
+                info!("   Take Profit Exit: PnL={:.2}% > 1.2% = {}", 
+                      pnl * 100.0, take_profit_condition);
+                info!("   Stop Loss Exit: PnL={:.2}% < -1.0% = {}", 
+                      pnl * 100.0, stop_loss_condition);
+                
+                // Smart exit strategy: Technical protection + profit targets
+                let should_exit = rsi_overbought_condition || momentum_decay_condition || take_profit_condition || stop_loss_condition;
                 
                 if should_exit {
-                    info!("🚪 {} triggering exit condition: PnL {:.2}%", 
-                          executor.get_wallet_name(), pnl * 100.0);
+                    let exit_reason = if stop_loss_condition {
+                        "STOP LOSS (-1.0%)"
+                    } else if take_profit_condition {
+                        "TAKE PROFIT (+1.2%)"
+                    } else if rsi_overbought_condition {
+                        "RSI OVERBOUGHT (+0.8%)"
+                    } else if momentum_decay_condition {
+                        "MOMENTUM DECAY (+0.8%)"
+                    } else {
+                        "UNKNOWN"
+                    };
+                    
+                    info!("🚪 {} EXIT CONDITION TRIGGERED: {} | PnL {:.2}%", 
+                          executor.get_wallet_name(), exit_reason, pnl * 100.0);
                     
                     // Create sell signal for this position
                     let exit_signal = TradingSignal {
@@ -367,26 +392,29 @@ impl SignalProcessor {
     }
 
     // STAGGERED STRATEGY: Find wallet with highest PnL for SELL signals
-    fn find_best_performing_wallet(&self, current_price: f64, executors: &[TradingExecutor], position_manager: &PositionManager) -> Option<usize> {
+    fn find_best_performing_wallet(&self, signal_price: f64, executors: &[TradingExecutor], position_manager: &PositionManager) -> Option<usize> {
         let mut best_wallet: Option<usize> = None;
         let mut best_pnl = f64::NEG_INFINITY;
 
+        info!("🔍 SELL SIGNAL PnL CALCULATION: Using signal price ${:.4}", signal_price);
+
         for (wallet_index, executor) in executors.iter().enumerate() {
             if let Some(position) = position_manager.get_position(wallet_index) {
-                let pnl = (current_price - position.entry_price) / position.entry_price;
+                let pnl = (signal_price - position.entry_price) / position.entry_price;
+                
+                info!("📊 {} SELL PnL: Entry ${:.4} → Signal ${:.4} = {:.2}%", 
+                      executor.get_wallet_name(), position.entry_price, signal_price, pnl * 100.0);
                 
                 if pnl > best_pnl {
                     best_pnl = pnl;
                     best_wallet = Some(wallet_index);
                 }
-                
-                info!("📊 {} PnL: {:.2}%", executor.get_wallet_name(), pnl * 100.0);
             }
         }
 
         if let Some(wallet_index) = best_wallet {
             let executor = &executors[wallet_index];
-            info!("🏆 Best performer: {} with {:.2}% PnL", 
+            info!("🏆 Best performer: {} with {:.2}% PnL (using signal price)", 
                   executor.get_wallet_name(), best_pnl * 100.0);
         }
 

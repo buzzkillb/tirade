@@ -71,9 +71,9 @@ impl MLStrategy {
             .unwrap_or(true);
 
         let min_confidence_threshold = std::env::var("MIN_CONFIDENCE_THRESHOLD")
-            .unwrap_or_else(|_| "0.45".to_string())
+            .unwrap_or_else(|_| "0.55".to_string())
             .parse::<f64>()
-            .unwrap_or(0.45);
+            .unwrap_or(0.55);
 
         let max_position_size = std::env::var("ML_MAX_POSITION_SIZE")
             .unwrap_or_else(|_| "0.9".to_string())
@@ -121,6 +121,37 @@ impl MLStrategy {
         }
 
         let features = self.extract_features(prices, indicators)?;
+        
+        // Handle no-trade-history scenario more gracefully
+        if self.recent_trades.is_empty() {
+            debug!("🤖 ML: No trade history available, using minimal adjustments");
+            let mut enhanced_signal = signal.clone();
+            
+            // Only apply volatility adjustments when no trade history
+            if features.volatility > 0.25 {
+                enhanced_signal.confidence -= 0.05; // Minimal reduction for very high volatility
+                enhanced_signal.reasoning.push("ML: High volatility adjustment (no trade history)".to_string());
+            }
+            
+            // Add basic ML reasoning
+            enhanced_signal.reasoning.push("ML: No trade history - minimal adjustments applied".to_string());
+            
+            // Apply neural enhancement if available
+            if let Some(ref mut neural_system) = self.neural_system {
+                match neural_system.enhance_signal(&enhanced_signal, prices, indicators).await {
+                    Ok(neural_enhanced_signal) => {
+                        enhanced_signal = neural_enhanced_signal;
+                        info!("🧠 Neural enhancement applied successfully (no ML history)");
+                    }
+                    Err(e) => {
+                        warn!("Neural signal enhancement failed: {}", e);
+                    }
+                }
+            }
+            
+            return Ok(enhanced_signal);
+        }
+
         let prediction = self.predict(&features)?;
 
         // Only log significant ML predictions
@@ -146,19 +177,21 @@ impl MLStrategy {
             enhanced_signal.confidence -= 0.03; // Even smaller reduction if losing
         }
         
-        // Additional adjustments for consecutive losses (more conservative)
-        if prediction.consecutive_losses > 3.0 {
-            enhanced_signal.confidence -= 0.1; // Moderate reduction after many losses
-        } else if prediction.consecutive_losses > 2.0 {
-            enhanced_signal.confidence -= 0.05; // Smaller reduction after losses
+        // Additional adjustments for consecutive losses (less aggressive)
+        if prediction.consecutive_losses > 5.0 {
+            enhanced_signal.confidence -= 0.05; // Small reduction only after many losses
+        } else if prediction.consecutive_losses > 3.0 {
+            enhanced_signal.confidence -= 0.03; // Very small reduction after losses
         }
+        // Note: Removed penalty for 2-3 losses to prevent getting stuck
         
-        // Volatility adjustment (more conservative)
-        if features.volatility > 0.15 {
-            enhanced_signal.confidence -= 0.08; // Moderate reduction in high volatility
-        } else if features.volatility > 0.1 {
-            enhanced_signal.confidence -= 0.05; // Smaller reduction in high volatility
+        // Volatility adjustment (crypto-appropriate thresholds)
+        if features.volatility > 0.25 {
+            enhanced_signal.confidence -= 0.08; // Moderate reduction in very high volatility (25%+)
+        } else if features.volatility > 0.15 {
+            enhanced_signal.confidence -= 0.05; // Smaller reduction in high volatility (15%+)
         }
+        // Note: 7% volatility (your current level) now gets no penalty
         
         // Cap confidence at reasonable bounds
         enhanced_signal.confidence = enhanced_signal.confidence.max(0.2).min(0.9);
@@ -225,19 +258,21 @@ impl MLStrategy {
             confidence_score -= 0.1; // Moderate reduction if losing
         }
         
-        // Adjust for consecutive losses (more conservative)
-        if consecutive_losses > 3.0 {
-            confidence_score -= 0.2; // Bigger reduction after many losses
-        } else if consecutive_losses > 2.0 {
-            confidence_score -= 0.1; // Moderate reduction after losses
+        // Adjust for consecutive losses (less aggressive)
+        if consecutive_losses > 5.0 {
+            confidence_score -= 0.1; // Small reduction only after many losses
+        } else if consecutive_losses > 3.0 {
+            confidence_score -= 0.05; // Very small reduction after losses
         }
+        // Note: Removed penalty for 2-3 losses to prevent getting stuck
         
-        // Adjust for volatility (more conservative)
-        if volatility > 0.15 {
-            confidence_score -= 0.15; // Bigger reduction in high volatility
-        } else if volatility > 0.1 {
-            confidence_score -= 0.1; // Moderate reduction in high volatility
+        // Adjust for volatility (crypto-appropriate thresholds)
+        if volatility > 0.25 {
+            confidence_score -= 0.15; // Bigger reduction in very high volatility (25%+)
+        } else if volatility > 0.15 {
+            confidence_score -= 0.1; // Moderate reduction in high volatility (15%+)
         }
+        // Note: 7% volatility (your current level) now gets no penalty
         
         // Cap confidence at reasonable bounds
         confidence_score = confidence_score.max(0.2_f64).min(0.8_f64);
@@ -247,9 +282,9 @@ impl MLStrategy {
                         else if consecutive_losses > 2.0 { 0.5 }
                         else { 0.3 };
         
-        // Simple market regime classification
-        let market_regime = if volatility > 0.08 { 
-            MarketRegime::Volatile 
+        // Crypto-appropriate market regime classification
+        let market_regime = if volatility > 0.20 { 
+            MarketRegime::Volatile  // 20%+ volatility is truly volatile for crypto
         } else if win_rate > 0.6 { 
             MarketRegime::Trending 
         } else { 
@@ -280,7 +315,7 @@ impl MLStrategy {
         // Reduce size based on risk factors
         if features.consecutive_losses > 2.0 { size *= 0.5; } // 50% reduction after losses
         if features.consecutive_losses > 4.0 { size *= 0.3; } // 70% reduction after many losses
-        if features.volatility > 0.08 { size *= 0.6; } // 40% reduction in high volatility
+        if features.volatility > 0.20 { size *= 0.6; } // 40% reduction in very high volatility (20%+)
         if features.win_rate < 0.4 { size *= 0.7; } // 30% reduction with poor performance
         
         // Increase size for high-confidence setups

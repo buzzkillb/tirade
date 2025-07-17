@@ -196,6 +196,65 @@
             color: #ff6464;
         }
         
+        /* Enhanced Signal Styles */
+        .signal-item.enhanced {
+            flex-direction: column;
+            align-items: stretch;
+            padding: 12px 0;
+        }
+        
+        .signal-main {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            width: 100%;
+        }
+        
+        .signal-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 5px;
+        }
+        
+        .signal-details {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            font-size: 0.8rem;
+            opacity: 0.9;
+        }
+        
+        .neural-badge {
+            background: linear-gradient(45deg, #00ff41, #00ccff);
+            color: #000;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            animation: glow 2s ease-in-out infinite alternate;
+        }
+        
+        @keyframes glow {
+            from { box-shadow: 0 0 5px rgba(0, 255, 65, 0.5); }
+            to { box-shadow: 0 0 15px rgba(0, 255, 65, 0.8); }
+        }
+        
+        .confidence {
+            color: #00ff41;
+            font-weight: bold;
+        }
+        
+        .ml-rate {
+            color: #00ccff;
+            font-weight: bold;
+        }
+        
+        .pair {
+            color: #ffff00;
+            font-weight: bold;
+        }
+        
         .timestamp {
             font-size: 0.8rem;
             opacity: 0.7;
@@ -414,15 +473,20 @@
                     signalsElement.innerHTML = '<div class="loading">No recent signals</div>';
                 } else {
                     signalsElement.innerHTML = data.recent_signals.map(signal => `
-                        <div class="signal-item">
-                            <div>
-                                <span class="${signal.signal_type.toLowerCase() === 'buy' ? 'buy' : 'sell'}">${signal.signal_type.toUpperCase()}</span>
-                                <span>${signal.pair}</span>
+                        <div class="signal-item enhanced">
+                            <div class="signal-main">
+                                <div class="signal-header">
+                                    <span class="${signal.signal_type.toLowerCase() === 'buy' ? 'buy' : 'sell'}">${signal.signal_type.toUpperCase()}</span>
+                                    <span class="pair">${signal.pair}</span>
+                                    ${signal.neural_enhanced ? '<span class="neural-badge">🧠 AI</span>' : ''}
+                                </div>
+                                <div class="signal-details">
+                                    <span class="confidence">Conf: ${(signal.strength * 100).toFixed(0)}%</span>
+                                    ${signal.ml_win_rate > 0 ? `<span class="ml-rate">ML: ${(signal.ml_win_rate * 100).toFixed(0)}%</span>` : ''}
+                                    <span class="timestamp">${formatTimestamp(signal.timestamp)}</span>
+                                </div>
                             </div>
-                            <div>
-                                <span class="signal-strength ${getSignalStrengthClass(signal.strength)}">${(signal.strength * 100).toFixed(0)}%</span>
-                                <span class="timestamp">${formatTimestamp(signal.timestamp)}</span>
-                            </div>
+                            <div class="signal-strength ${getSignalStrengthClass(signal.strength)}">${(signal.strength * 100).toFixed(0)}%</div>
                         </div>
                     `).join('');
                 }

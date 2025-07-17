@@ -1,438 +1,308 @@
-# 🤖 Tirade - AI-Powered Solana Trading Bot
+# 🚀 TIRADE - Advanced Solana Trading Bot
 
-A sophisticated Rust-based trading bot for Solana with advanced machine learning capabilities, real-time market analysis, and automated position management.
+**TIRADE** is a sophisticated, AI-powered trading bot for Solana that combines traditional technical analysis with cutting-edge machine learning and neural networks to execute profitable trades on SOL/USDC pairs.
 
-[![Rust](https://img.shields.io/badge/Rust-80.7%25-orange)](https://github.com/buzzkillb/tirade)
-[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/buzzkillb/tirade/blob/master/LICENSE)
-[![GitHub](https://img.shields.io/badge/GitHub-buzzkillb%2Ftirade-blue)](https://github.com/buzzkillb/tirade)
+## 🧠 Core Features
 
-## 🎯 Overview
+### 🎯 **Intelligent Trading Engine**
+- **Multi-wallet support** with round-robin position management
+- **Smart exit strategy**: 0.8% technical exits + 1.2% profit targets
+- **Single position per wallet** with 90% capital utilization
+- **Real-time technical analysis** (RSI, SMA, momentum, volatility)
+- **Jupiter DEX integration** for optimal swap execution
 
-Tirade is a high-frequency trading bot designed for the Solana ecosystem, featuring:
+### 🤖 **Machine Learning Integration**
+- **Adaptive signal enhancement** based on historical performance
+- **Market regime detection** (trending, ranging, volatile)
+- **Trade outcome prediction** using feature extraction
+- **Continuous learning** from trade results
+- **Performance-based confidence adjustment**
 
-- **Advanced ML Strategy**: Real-time performance-based confidence adjustments
-- **Multi-Source Price Feeds**: Pyth Network, Jupiter, and Coinbase integration
-- **Technical Analysis**: RSI, SMA, volatility, and market regime detection
-- **Risk Management**: Dynamic position sizing and stop-loss/take-profit
-- **Real-Time Dashboard**: Live monitoring with technical indicators
-- **Paper Trading Mode**: Safe testing environment
+### 🧬 **Neural Network Enhancement**
+- **Online learning algorithms** for pattern recognition
+- **Real-time market adaptation** without retraining
+- **Pattern matching** for entry/exit optimization
+- **Risk assessment** using neural confidence scoring
+- **Memory-based learning** from recent market behavior
 
-## 🧠 Trading Logic & Machine Learning
+### 📊 **Advanced Analytics**
+- **Real-time dashboard** with live trading metrics
+- **Position tracking** across multiple wallets
+- **P&L monitoring** with detailed trade history
+- **Technical indicator visualization**
+- **ML/Neural performance insights**
 
-### **Core Strategy Architecture**
-
-The bot uses a **dual-strategy approach** combining traditional technical analysis with machine learning enhancements:
-
-#### **1. Technical Analysis Strategy (Option 2)**
-```rust
-// Simplified strategy using only RSI and Moving Average Trend
-// 1. RSI Overbought/Oversold
-if rsi_fast > dynamic_thresholds.rsi_overbought {
-    signal_type = SignalType::Sell;
-    confidence += 0.5;
-} else if rsi_fast < dynamic_thresholds.rsi_oversold {
-    signal_type = SignalType::Buy;
-    confidence += 0.5;
-}
-
-// 2. Moving Average Trend
-if current_price > sma_short && rsi_fast >= 40.0 && rsi_fast <= 60.0 {
-    signal_type = SignalType::Buy;
-    confidence += 0.3;
-}
-```
-
-**Key Features:**
-- **RSI14 Analysis**: Consistent RSI14 calculations across strategy and dashboard
-- **Dynamic Thresholds**: Adaptive to market conditions (trending, ranging, volatile, consolidating)
-- **Moving Average Confirmation**: Price vs SMA20 with RSI neutral zone validation
-- **Confidence Scoring**: 0.0-1.0 scale with 35% minimum threshold
-
-#### **2. Machine Learning Enhancement**
-
-The ML system provides **real-time performance-based adjustments**:
-
-```rust
-// ML Features (4 essential metrics)
-pub struct MLFeatures {
-    pub rsi_fast: f64,           // Current RSI (normalized 0-1)
-    pub win_rate: f64,           // Recent win rate (0-1)
-    pub consecutive_losses: f64,  // Number of consecutive losses
-    pub volatility: f64,         // Current volatility
-}
-```
-
-**ML Learning Process:**
-1. **Trade Recording**: Every closed position is recorded with market context
-2. **Performance Analysis**: Win rate calculated from last 10 trades
-3. **Risk Assessment**: Consecutive losses and volatility analysis
-4. **Confidence Adjustment**: Real-time ML enhancements to base strategy
-
-**ML Confidence Adjustments:**
-```rust
-// Conservative ML adjustments
-if prediction.win_rate > 0.7 {
-    enhanced_signal.confidence += 0.05; // Small boost for consistent wins
-} else if prediction.win_rate < 0.3 {
-    enhanced_signal.confidence -= 0.05; // Small reduction for losses
-}
-
-if prediction.consecutive_losses > 3.0 {
-    enhanced_signal.confidence -= 0.1; // Bigger reduction after many losses
-}
-```
-
-### **Market Regime Detection**
-
-The system automatically detects market conditions:
-
-```rust
-pub enum MarketRegime {
-    Consolidating,  // Low volatility, sideways movement
-    Trending,       // Strong directional movement
-    Volatile,       // High volatility, unpredictable
-    Unknown,        // Insufficient data
-}
-```
-
-**Regime-Based Adjustments:**
-- **Trending**: Higher confidence for trend-following signals
-- **Volatile**: Reduced position sizes and confidence
-- **Consolidating**: Conservative approach with lower thresholds
-
-### **Risk Management System**
-
-#### **Position Management**
-- **Single Position**: Only one active position at a time
-- **Dynamic Sizing**: Based on ML confidence and market conditions
-- **Stop Loss**: -2% automatic exit
-- **Take Profit**: +1.5% automatic exit
-
-#### **ML-Based Position Sizing**
-```rust
-fn calculate_optimal_position_size(&self, features: &MLFeatures) -> f64 {
-    let mut size = self.max_position_size; // Start with max size
-    
-    // Reduce size based on risk factors
-    if features.consecutive_losses > 2.0 { size *= 0.5; } // 50% reduction
-    if features.consecutive_losses > 4.0 { size *= 0.3; } // 70% reduction
-    if features.volatility > 0.08 { size *= 0.6; } // 40% reduction in high volatility
-    if features.win_rate < 0.4 { size *= 0.7; } // 30% reduction with poor performance
-    
-    size.max(0.05).min(self.max_position_size) // Min 5%, Max 90%
-}
-```
-
-## 🏗️ System Architecture
-
-### **Microservices Design**
+## 🏗️ Architecture
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Price Feed    │    │ Trading Logic   │    │   Dashboard     │
-│                 │    │                 │    │                 │
-│ • Pyth Network  │    │ • Strategy      │    │ • Real-time UI  │
-│ • Jupiter       │    │ • ML Engine     │    │ • Charts        │
-│ • Coinbase      │    │ • Risk Mgmt     │    │ • Signals       │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Trading       │    │   Machine        │    │   Neural        │
+│   Engine        │◄──►│   Learning       │◄──►│   Networks      │
+│                 │    │   Strategy       │    │                 │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
          │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 │
-                    ┌─────────────────┐
-                    │   Database      │
-                    │                 │
-                    │ • SQLite        │
-                    │ • Trade History │
-                    │ • ML Data       │
-                    └─────────────────┘
+         ▼                       ▼                       ▼
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Jupiter DEX   │    │   Database       │    │   Dashboard     │
+│   Integration   │    │   Service        │    │   & Analytics   │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
-
-### **Data Flow**
-
-1. **Price Collection**: Multi-source price feeds every 1-10 seconds
-2. **Technical Analysis**: RSI, SMA, volatility calculations
-3. **Strategy Execution**: Signal generation with confidence scoring
-4. **ML Enhancement**: Performance-based adjustments
-5. **Position Management**: Risk-controlled trade execution
-6. **Data Storage**: Historical trade and ML data persistence
 
 ## 🚀 Quick Start
 
-### **Prerequisites**
-
+### 1. Clone the Repository
 ```bash
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-
-# Install system dependencies
-sudo apt update
-sudo apt install -y screen sqlite3 curl
-
-# Clone the repository
-git clone https://github.com/buzzkillb/tirade.git
+git clone -b neural https://github.com/buzzkillb/tirade.git
 cd tirade
 ```
 
-### **1. Database Initialization**
-
+### 2. Environment Setup
 ```bash
-# Initialize the database schema and tables
-./init_database.sh
-```
-
-This script:
-- Creates SQLite database with all required tables
-- Sets up ML trade history storage
-- Initializes technical indicators tables
-- Configures performance metrics tracking
-
-### **2. Environment Configuration**
-
-```bash
-# Copy example environment file
+# Copy the example environment file
 cp env.example .env
 
-# Edit with your configuration
+# Edit the .env file with your configuration
 nano .env
 ```
 
 **Required Environment Variables:**
 ```bash
-# Solana Configuration
-SOLANA_PRIVATE_KEY="your_private_key_here"
-SOLANA_RPC_URL="https://api.mainnet-beta.solana.com"
-
 # Trading Configuration
-TRADING_PAIR="SOL/USDC"
-MIN_CONFIDENCE_THRESHOLD=0.35
-POSITION_SIZE_PERCENTAGE=0.5
+ENABLE_TRADING_EXECUTION=true          # Set to false for paper trading
+POSITION_SIZE_PERCENTAGE=0.9           # Use 90% of wallet balance
+SLIPPAGE_TOLERANCE=0.005               # 0.5% slippage tolerance
+MIN_CONFIDENCE_THRESHOLD=0.7           # 70% minimum signal confidence
+
+# Solana Configuration
+SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+SOLANA_PRIVATE_KEY=your_private_key_here
 
 # Database Configuration
-DATABASE_URL="sqlite:data/trading_bot.db"
+DATABASE_URL=http://localhost:3001
 
-# Paper Trading (Recommended for testing)
-ENABLE_TRADING_EXECUTION=false
+# Trading Pair
+TRADING_PAIR=SOL/USDC
+
+# Multi-wallet Support (optional)
+WALLET_NAMES=Main,Secondary,Tertiary
+WALLET_KEYS=key1,key2,key3
 ```
 
-### **3. Start All Services**
+### 3. Initialize Database
+```bash
+# Make the script executable and run it
+chmod +x init-database.sh
+./init-database.sh
+```
 
+### 4. Start All Services
 ```bash
 # Start all services in screen sessions
+chmod +x start_all_screen.sh
 ./start_all_screen.sh
 ```
 
-This script starts:
-- **Database Service** (Port 8080)
-- **Price Feed** (Port 8081)
-- **Trading Logic** (Port 8082)
-- **Dashboard** (Port 3000)
+This will start:
+- **Database Service** (Port 3001)
+- **Price Feed Service** (Port 3002) 
+- **Trading Logic Engine**
+- **Web Dashboard** (Port 8080)
 
-### **4. Monitor the System**
-
-```bash
-# Check service status
-./check_trading_status.sh
-
-# View trading logs
-tail -f logs/trading_logic.log
-
-# Access dashboard
-# Open http://localhost:3000 in your browser
+### 5. Access Dashboard
+Open your browser and navigate to:
+```
+http://localhost:8080
 ```
 
-## 📊 Dashboard Features
+## 🎯 Trading Strategy
 
-### **Real-Time Monitoring**
+### **Smart Exit Conditions**
+The bot uses a sophisticated multi-tier exit strategy:
 
-- **Live Price Charts**: SOL/USDC with technical indicators
-- **Trading Signals**: Buy/Sell/Hold with confidence levels
-- **Position Management**: Active positions with P&L tracking
-- **ML Metrics**: Win rate, consecutive losses, market regime
-- **System Status**: Service health and performance
+1. **Technical Protection (0.8% threshold)**
+   - Exit early when RSI > 70 (overbought) + 0.8% profit
+   - Exit when momentum decay detected + 0.8% profit
 
-### **Technical Indicators Display**
+2. **Profit Target (1.2%)**
+   - Take solid gains when no technical issues present
 
-- **RSI14**: Relative Strength Index (14-period)
-- **SMA20/SMA50**: Simple Moving Averages
-- **Volatility**: 24-hour price volatility
-- **Market Regime**: Trending/Consolidating/Volatile
+3. **Risk Management (1% stop loss)**
+   - Tight risk control to preserve capital
 
-### **ML Performance Tracking**
+### **Position Management**
+- **Single position per wallet** to prevent over-leveraging
+- **90% capital utilization** for maximum efficiency
+- **Database-driven position tracking** (not balance-based)
+- **Round-robin wallet rotation** for multi-wallet setups
 
-- **Win Rate**: Percentage of profitable trades
-- **Consecutive Losses**: Current losing streak
-- **Risk Score**: ML-calculated risk assessment
-- **Confidence Adjustments**: Real-time ML enhancements
+## 🤖 Machine Learning Features
 
-## 🔧 Advanced Configuration
+### **Signal Enhancement**
+- Analyzes historical trade performance
+- Adjusts signal confidence based on market conditions
+- Learns from successful/failed trades
+- Adapts to changing market regimes
+
+### **Feature Extraction**
+- Price momentum and volatility patterns
+- Technical indicator combinations
+- Market microstructure analysis
+- Time-based pattern recognition
+
+### **Continuous Learning**
+- Updates models after each trade
+- No offline retraining required
+- Real-time adaptation to market changes
+- Performance-based strategy adjustment
+
+## 🧬 Neural Network Integration
+
+### **Online Learning**
+- Processes market data in real-time
+- Adapts without historical data requirements
+- Memory-efficient pattern storage
+- Incremental learning from new observations
+
+### **Pattern Recognition**
+- Identifies recurring market patterns
+- Matches current conditions to historical outcomes
+- Confidence-weighted decision making
+- Risk assessment through neural scoring
+
+### **Adaptive Algorithms**
+- Self-adjusting learning rates
+- Pattern memory management
+- Confidence threshold optimization
+- Real-time performance monitoring
+
+## 📊 Monitoring & Management
+
+### **Screen Sessions**
+View running services:
+```bash
+screen -ls
+```
+
+Attach to specific services:
+```bash
+screen -r database-service
+screen -r price-feed
+screen -r trading-logic
+screen -r dashboard
+```
+
+### **Logs**
+Monitor real-time logs:
+```bash
+tail -f logs/trading-logic.log
+tail -f logs/database-service.log
+```
+
+### **Stop Services**
+```bash
+./stop_all_screen.sh
+```
+
+## 🔧 Configuration
 
 ### **Trading Parameters**
+- `POSITION_SIZE_PERCENTAGE`: Percentage of wallet to use (0.9 = 90%)
+- `MIN_CONFIDENCE_THRESHOLD`: Minimum signal confidence (0.7 = 70%)
+- `SLIPPAGE_TOLERANCE`: Maximum acceptable slippage (0.005 = 0.5%)
 
+### **ML/Neural Settings**
+- Automatic adaptation based on performance
+- No manual tuning required
+- Self-optimizing parameters
+- Real-time learning rate adjustment
+
+### **Multi-Wallet Setup**
+Configure multiple wallets for diversification:
 ```bash
-# Strategy Configuration
-MIN_DATA_POINTS=60              # Minimum data points before analysis
-CHECK_INTERVAL_SECS=30          # Analysis frequency (30 seconds)
-CONFIDENCE_THRESHOLD=0.35       # Minimum confidence for trades
-SIGNAL_COOLDOWN_SECS=300        # Cooldown between signals (5 minutes)
-
-# Risk Management
-POSITION_SIZE_PERCENTAGE=0.5    # % of wallet per trade
-MAX_POSITION_SIZE=100.0         # Maximum position size
-TAKE_PROFIT_PERCENT=1.5         # Dynamic take profit
-STOP_LOSS_PERCENT=2.0           # Dynamic stop loss
-
-# ML Configuration
-ML_ENABLED=true                 # Enable ML enhancements
-ML_MIN_CONFIDENCE=0.35          # ML confidence threshold
-ML_MAX_POSITION_SIZE=0.9        # ML position size limit
+WALLET_NAMES=Wallet1,Wallet2,Wallet3
+WALLET_KEYS=key1,key2,key3
 ```
 
-### **Technical Indicators**
+## 🛡️ Security & Risk Management
 
-```bash
-# RSI Configuration (Updated for consistency)
-RSI_FAST_PERIOD=14             # RSI14 for consistency
-RSI_SLOW_PERIOD=21             # RSI21 for divergence
-RSI_OVERSOLD=30                # Oversold threshold
-RSI_OVERBOUGHT=70              # Overbought threshold
+### **Risk Controls**
+- **1% stop loss** for tight risk management
+- **Single position limit** prevents over-exposure
+- **Confidence thresholds** filter low-quality signals
+- **Slippage protection** on all trades
 
-# Moving Averages
-SMA_SHORT_PERIOD=20            # Short-term SMA
-SMA_LONG_PERIOD=50             # Long-term SMA
-
-# Volatility
-VOLATILITY_WINDOW=20           # Volatility calculation window
-```
-
-## 🛠️ Troubleshooting
-
-### **Common Issues**
-
-#### **Service Won't Start**
-```bash
-# Check if ports are in use
-lsof -ti:8080 | xargs kill -9
-lsof -ti:3000 | xargs kill -9
-
-# Check environment variables
-echo $SOLANA_PRIVATE_KEY
-echo $DATABASE_URL
-```
-
-#### **Database Errors**
-```bash
-# Reinitialize database
-./init_database.sh
-
-# Check database file
-ls -la data/trading_bot.db
-```
-
-#### **Trading Logic Issues**
-```bash
-# Check logs with enhanced debugging
-tail -f logs/trading_logic.log
-
-# Verify wallet
-solana balance
-
-# Test ML trade queries
-./query_trades_ml.sh --pair SOLUSDC --stats
-```
-
-### **Performance Optimization**
-
-```bash
-# Increase system limits
-echo 'fs.file-max = 65536' | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
-
-# Optimize SQLite
-echo 'PRAGMA journal_mode=WAL;' | sqlite3 data/trading_bot.db
-```
+### **Security Features**
+- Private keys stored in environment variables
+- No sensitive data in code or logs
+- Secure RPC connections
+- Database isolation
 
 ## 📈 Performance Metrics
 
-### **Expected Behavior**
+The dashboard provides real-time insights:
+- **Live P&L tracking**
+- **Win rate statistics**
+- **Average trade duration**
+- **ML/Neural performance scores**
+- **Technical indicator status**
+- **Position management overview**
 
-- **Price Updates**: Every 1-10 seconds (multi-source)
-- **Trading Analysis**: Every 30 seconds
-- **Dashboard Refresh**: Every 2 seconds
-- **Signal Generation**: Based on confidence thresholds
-- **Position Duration**: 5 minutes to several hours
+## 🔄 Maintenance
 
-### **Success Indicators**
+### **Regular Tasks**
+- Monitor dashboard for performance
+- Check logs for any errors
+- Verify wallet balances
+- Review trade history
 
-- ✅ All services show "Running" status
-- ✅ Dashboard displays real-time data
-- ✅ Trading signals appear with confidence levels
-- ✅ ML metrics show stable win rates
-- ✅ No sudden confidence jumps
-- ✅ Consistent RSI values across dashboard and strategy
-
-## 🔒 Security Best Practices
-
-### **Environment Security**
-1. **Never commit private keys**: `.env` files are gitignored
-2. **Use paper trading first**: `ENABLE_TRADING_EXECUTION=false`
-3. **Start with small amounts**: `POSITION_SIZE_PERCENTAGE=0.1`
-4. **Monitor continuously**: Use dashboard and logs
-
-### **System Security**
-1. **SSH Access**: Use SSH keys, not passwords
-2. **Firewall**: Only open necessary ports
-3. **Regular Updates**: Keep system and dependencies updated
-4. **Backup**: Regular database backups
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Make your changes
-4. Test thoroughly with paper trading
-5. Submit a pull request
-
-### **Development Setup**
-
+### **Updates**
 ```bash
-# Install development dependencies
-cargo install cargo-watch
-
-# Run with hot reload
-cargo watch -x run
-
-# Run tests
-cargo test
-
-# Check formatting
-cargo fmt
+git pull origin neural
+./stop_all_screen.sh
+./start_all_screen.sh
 ```
 
-## 📄 License
+## 🆘 Troubleshooting
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+### **Common Issues**
+1. **Database connection errors**: Check if database service is running
+2. **RPC timeouts**: Verify SOLANA_RPC_URL is accessible
+3. **Trading execution failures**: Check wallet balance and private key
+4. **Dashboard not loading**: Ensure port 8080 is available
 
-## ⚠️ Disclaimer
+### **Debug Mode**
+Enable detailed logging:
+```bash
+RUST_LOG=debug ./start_all_screen.sh
+```
 
-**This software is for educational and research purposes only. Trading cryptocurrencies involves substantial risk of loss. Use at your own risk and never invest more than you can afford to lose.**
+## 📚 Technical Details
 
-- Past performance does not guarantee future results
-- Always test with paper trading first
-- Monitor the bot continuously
-- Understand the risks involved
+### **Built With**
+- **Rust** - High-performance systems programming
+- **Tokio** - Async runtime for concurrent operations
+- **Jupiter** - Solana DEX aggregator for optimal swaps
+- **PostgreSQL** - Reliable data persistence
+- **WebSocket** - Real-time dashboard updates
 
-## 📞 Support
-
-For issues, questions, or contributions:
-
-1. Check the [Troubleshooting](TROUBLESHOOTING.md) section
-2. Review service logs for error messages
-3. Open an issue on [GitHub](https://github.com/buzzkillb/tirade)
-4. Join our community discussions
+### **Key Components**
+- **Trading Engine**: Core logic and strategy execution
+- **ML Strategy**: Machine learning signal enhancement
+- **Neural Enhancement**: Online learning and pattern recognition
+- **Database Service**: Data persistence and analytics
+- **Price Feed**: Real-time market data collection
+- **Dashboard**: Web-based monitoring interface
 
 ---
 
-**Built with ❤️ in Rust for the Solana ecosystem**
+## ⚠️ Disclaimer
 
-[GitHub Repository](https://github.com/buzzkillb/tirade) | [Issues](https://github.com/buzzkillb/tirade/issues) | [Discussions](https://github.com/buzzkillb/tirade/discussions) 
+This software is for educational and research purposes. Trading cryptocurrencies involves substantial risk of loss. Never trade with funds you cannot afford to lose. The developers are not responsible for any financial losses incurred through the use of this software.
+
+## 📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+---
+
+**Happy Trading! 🚀**

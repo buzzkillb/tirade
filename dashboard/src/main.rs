@@ -36,6 +36,9 @@ struct TradingSignal {
     pair: String,
     strength: f64,
     timestamp: DateTime<Utc>,
+    reasoning: String,
+    neural_enhanced: bool,
+    ml_win_rate: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -170,6 +173,18 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
                 if let Some(data) = api_response.get("data") {
                     if let Some(signals) = data.as_array() {
                         signals.iter().take(5).map(|signal| {
+                            let reasoning = signal.get("reasoning").and_then(|r| r.as_str()).unwrap_or("").to_string();
+                            let neural_enhanced = reasoning.contains("Neural") || reasoning.contains("ML");
+                            let ml_win_rate = if reasoning.contains("ML Win Rate:") {
+                                reasoning.split("ML Win Rate: ")
+                                    .nth(1)
+                                    .and_then(|s| s.split('%').next())
+                                    .and_then(|s| s.parse::<f64>().ok())
+                                    .unwrap_or(0.0) / 100.0
+                            } else {
+                                0.0
+                            };
+                            
                             TradingSignal {
                                 signal_type: signal.get("signal_type").and_then(|s| s.as_str()).unwrap_or("").to_string(),
                                 pair: signal.get("pair").and_then(|p| p.as_str()).unwrap_or("").to_string(),
@@ -178,6 +193,9 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
                                     .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
                                     .map(|dt| dt.with_timezone(&Utc))
                                     .unwrap_or_else(|| Utc::now()),
+                                reasoning,
+                                neural_enhanced,
+                                ml_win_rate,
                             }
                         }).collect()
                     } else {
