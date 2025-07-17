@@ -255,6 +255,19 @@ impl SignalProcessor {
     ) -> Result<()> {
         let current_price = prices.last().map(|p| p.price).unwrap_or(0.0);
         
+        // Debug price data ordering
+        if prices.len() >= 2 {
+            let first_price = prices.first().map(|p| p.price).unwrap_or(0.0);
+            let last_price = prices.last().map(|p| p.price).unwrap_or(0.0);
+            let first_time = prices.first().map(|p| p.timestamp).unwrap();
+            let last_time = prices.last().map(|p| p.timestamp).unwrap();
+            
+            info!("🔍 PRICE DATA DEBUG: First=${:.4} ({}), Last=${:.4} ({}), Count={}", 
+                  first_price, first_time.format("%H:%M:%S"), 
+                  last_price, last_time.format("%H:%M:%S"), 
+                  prices.len());
+        }
+        
         info!("🔍 EXIT CONDITIONS CHECK: Current price ${:.4}", current_price);
         
         // Check each position for exit conditions

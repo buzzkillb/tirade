@@ -55,9 +55,11 @@ impl PositionManager {
     }
 
     pub async fn recover_positions(&mut self, database: &DatabaseService, wallet_addresses: &[String]) -> Result<()> {
-        info!("🔄 Recovering positions from database for {} wallets...", wallet_addresses.len());
+        info!("🔄 POSITION RECOVERY: Starting recovery for {} wallets...", wallet_addresses.len());
         
         for (wallet_index, wallet_address) in wallet_addresses.iter().enumerate() {
+            info!("🔍 POSITION RECOVERY: Checking wallet {} ({})", wallet_index + 1, wallet_address);
+            
             match database.fetch_open_positions_for_wallet(wallet_address).await {
                 Ok(Some(position_db)) => {
                     let position = Position {
@@ -76,17 +78,22 @@ impl PositionManager {
                     };
                     
                     self.positions[wallet_index] = Some(position.clone());
-                    info!("📈 Wallet {} recovered position: Entry ${:.4}", 
-                          wallet_index + 1, position.entry_price);
+                    info!("✅ POSITION RECOVERED: Wallet {} - Entry ${:.4}, Quantity {:.6}, ID: {}", 
+                          wallet_index + 1, position.entry_price, position.quantity, position_db.id);
                 }
                 Ok(None) => {
-                    info!("💤 Wallet {} no open positions", wallet_index + 1);
+                    info!("💤 POSITION RECOVERY: Wallet {} ({}) - No open positions found", 
+                          wallet_index + 1, wallet_address);
                 }
                 Err(e) => {
-                    warn!("❌ Wallet {} failed to recover positions: {}", wallet_index + 1, e);
+                    error!("❌ POSITION RECOVERY: Wallet {} ({}) failed: {}", 
+                           wallet_index + 1, wallet_address, e);
                 }
             }
         }
+        
+        let recovered_count = self.get_active_position_count();
+        info!("🎯 POSITION RECOVERY COMPLETE: {} active positions recovered", recovered_count);
         
         Ok(())
     }

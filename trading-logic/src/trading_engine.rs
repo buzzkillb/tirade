@@ -222,13 +222,22 @@ impl TradingEngine {
                 if !candles.is_empty() {
                     info!("📊 Using {} 1-minute candles for analysis", candles.len());
                     
-                    let prices: Vec<PriceFeed> = candles.into_iter().map(|candle| PriceFeed {
+                    let mut prices: Vec<PriceFeed> = candles.into_iter().map(|candle| PriceFeed {
                         id: candle.id,
                         source: "candle".to_string(),
                         pair: candle.pair,
                         price: candle.close,
                         timestamp: candle.timestamp,
                     }).collect();
+                    
+                    // Sort by timestamp to ensure most recent price is last
+                    prices.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+                    
+                    if prices.len() >= 2 {
+                        info!("📊 PRICE RANGE: ${:.4} → ${:.4} (oldest to newest)", 
+                              prices.first().unwrap().price, prices.last().unwrap().price);
+                    }
+                    
                     return Ok(prices);
                 }
             }
@@ -254,7 +263,7 @@ impl TradingEngine {
     }
 
     fn calculate_consolidated_indicators(&self, prices: &[PriceFeed], strategy_indicators: &crate::models::TradingIndicators) -> TechnicalIndicators {
-        let current_price = prices.first().map(|p| p.price).unwrap_or(0.0);
+        let current_price = prices.last().map(|p| p.price).unwrap_or(0.0);
         let now = Utc::now();
         
         // Calculate RSI14

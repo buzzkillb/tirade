@@ -188,7 +188,7 @@ impl DatabaseService {
     }
 
     pub async fn fetch_open_positions_for_wallet(&self, wallet_address: &str) -> Result<Option<PositionDb>> {
-        let url = format!("{}/positions/wallet/{}/open", self.base_url, 
+        let url = format!("{}/positions/{}/open", self.base_url, 
                          urlencoding::encode(wallet_address));
         
         let response = self.client.get(&url).send().await?;
@@ -198,12 +198,16 @@ impl DatabaseService {
             return Ok(None);
         }
         
-        let api_response: Result<crate::models::ApiResponse<Option<PositionDb>>, _> = serde_json::from_str(&text);
+        let api_response: Result<crate::models::ApiResponse<Vec<PositionDb>>, _> = serde_json::from_str(&text);
         match api_response {
-            Ok(crate::models::ApiResponse { success: true, data: Some(Some(position_db)), .. }) => {
-                Ok(Some(position_db))
+            Ok(crate::models::ApiResponse { success: true, data: Some(positions), .. }) => {
+                // Return the first open position if any exist
+                Ok(positions.into_iter().next())
             }
-            _ => Ok(None),
+            _ => {
+                warn!("Failed to parse positions response: {}", text);
+                Ok(None)
+            }
         }
     }
 
