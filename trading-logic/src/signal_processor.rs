@@ -51,6 +51,9 @@ impl SignalProcessor {
                             info!("💰 {} using execution price: ${:.4} (Jupiter: {:?}, Signal: ${:.4})", 
                                   executor.get_wallet_name(), entry_price, execution_price, signal.price);
                             
+                            // Use USDC change from transaction result (negative = spent)
+                            let usdc_spent = usdc_change.filter(|&change| change < 0.0);
+                            
                             // Create position record
                             let position = Position {
                                 position_id: None, // Will be set after database post
@@ -58,13 +61,11 @@ impl SignalProcessor {
                                 entry_time: signal.timestamp,
                                 quantity: quantity.unwrap_or(1.0),
                                 position_type: PositionType::Long,
+                                usdc_spent,
                             };
 
                             // Post to database with actual USDC spent from transaction
                             let wallet_address = executor.get_wallet_address()?;
-                            
-                            // Use USDC change from transaction result (negative = spent)
-                            let usdc_spent = usdc_change.filter(|&change| change < 0.0);
                             
                             if let Some(usdc_amount) = usdc_spent {
                                 info!("💰 USDC-based PnL: Recording ${:.2} USDC spent for position entry", usdc_amount.abs());
@@ -119,18 +120,19 @@ impl SignalProcessor {
                                     info!("💰 {} using execution price: ${:.4} (Jupiter: {:?}, Signal: ${:.4})", 
                                           fallback_executor.get_wallet_name(), entry_price, execution_price, signal.price);
                                     
+                                    // Use USDC change from transaction result (negative = spent)
+                                    let usdc_spent = usdc_change.filter(|&change| change < 0.0);
+                                    
                                     let position = Position {
                                         position_id: None,
                                         entry_price,
                                         entry_time: signal.timestamp,
                                         quantity: quantity.unwrap_or(1.0),
                                         position_type: PositionType::Long,
+                                        usdc_spent,
                                     };
 
                                     let wallet_address = fallback_executor.get_wallet_address()?;
-                                    
-                                    // Use USDC change from transaction result (negative = spent)
-                                    let usdc_spent = usdc_change.filter(|&change| change < 0.0);
                                     
                                     if let Some(usdc_amount) = usdc_spent {
                                         info!("💰 USDC-based PnL: Recording ${:.2} USDC spent for fallback position entry", usdc_amount.abs());
@@ -228,15 +230,29 @@ impl SignalProcessor {
                             }
                         }
 
-                        // Record trade result for ML - use price-based PnL as fallback
+                        // Calculate actual USDC-based PnL if available
+                        let (actual_pnl, success) = if let (Some(usdc_received), Some(usdc_spent)) = (usdc_received, position.usdc_spent) {
+                            // Use actual USDC flow for PnL calculation
+                            let usdc_pnl_percentage = (usdc_received - usdc_spent.abs()) / usdc_spent.abs();
+                            let is_profitable = usdc_received > usdc_spent.abs();
+                            info!("💰 Neural Learning: Using actual USDC PnL: {:.2}% (${:.2} → ${:.2})", 
+                                  usdc_pnl_percentage * 100.0, usdc_spent.abs(), usdc_received);
+                            (usdc_pnl_percentage, is_profitable)
+                        } else {
+                            // Fallback to price-based PnL
+                            warn!("⚠️ Neural Learning: Using price-based PnL fallback (USDC data unavailable)");
+                            (price_based_pnl, price_based_pnl > 0.0)
+                        };
+
+                        // Record trade result for ML with actual USDC-based PnL
                         let trade_result = TradeResult {
                             entry_price: position.entry_price,
                             exit_price,
-                            pnl: price_based_pnl,
+                            pnl: actual_pnl,
                             duration_seconds: (signal.timestamp - position.entry_time).num_seconds(),
                             entry_time: position.entry_time,
                             exit_time: signal.timestamp,
-                            success: price_based_pnl > 0.0,
+                            success,
                         };
                         ml_strategy.record_trade(trade_result).await;
 

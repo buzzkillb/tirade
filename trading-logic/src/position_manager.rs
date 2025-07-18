@@ -11,6 +11,7 @@ pub struct Position {
     pub entry_time: DateTime<Utc>,
     pub quantity: f64,
     pub position_type: PositionType,
+    pub usdc_spent: Option<f64>, // Track actual USDC spent for this position
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +76,7 @@ impl PositionManager {
                                 continue;
                             }
                         },
+                        usdc_spent: None, // Will be populated from database if available
                     };
                     
                     self.positions[wallet_index] = Some(position.clone());
