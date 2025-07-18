@@ -8,6 +8,7 @@ mod database_service;
 mod position_manager;
 mod signal_processor;
 mod neural_enhancement;
+mod data_persistence;
 
 use anyhow::Result;
 use tracing::info;

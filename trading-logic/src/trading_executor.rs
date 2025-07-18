@@ -19,6 +19,7 @@ pub struct TradingExecutor {
     transaction_binary_path: String,
     wallet_index: usize,
     wallet_name: String,
+    last_transaction_result: Option<TransactionResult>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,7 +29,7 @@ pub struct WalletBalance {
     pub timestamp: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionResult {
     pub success: bool,
     pub signature: Option<String>,
@@ -128,6 +129,7 @@ impl TradingExecutor {
             transaction_binary_path,
             wallet_index,
             wallet_name,
+            last_transaction_result: None,
         })
     }
 
@@ -139,7 +141,7 @@ impl TradingExecutor {
         &self.wallet_name
     }
 
-    pub async fn execute_signal(&self, signal: &TradingSignal, sell_quantity: Option<f64>) -> Result<(bool, Option<f64>, Option<f64>)> {
+    pub async fn execute_signal(&self, signal: &TradingSignal, sell_quantity: Option<f64>) -> Result<(bool, Option<f64>, Option<f64>, Option<f64>)> {
         // Check if trading execution is enabled
         if !self.enable_execution {
             info!("🔄 Paper trading mode - signal would be executed: {:?} at ${:.4}", 
@@ -147,14 +149,14 @@ impl TradingExecutor {
             
             // In paper trading mode, simulate the transaction with dry-run
             let success = self.simulate_trade(signal).await?;
-            return Ok((success, None, None)); // No quantity or execution price for paper trading
+            return Ok((success, None, None, None)); // No quantity, execution price, or USDC change for paper trading
         }
 
         // Check confidence threshold
         if signal.confidence < self.min_confidence_threshold {
             warn!("⚠️  Signal confidence ({:.1}%) below threshold ({:.1}%) - skipping execution", 
                   signal.confidence * 100.0, self.min_confidence_threshold * 100.0);
-            return Ok((false, None, None));
+            return Ok((false, None, None, None));
         }
 
         // Get current wallet balance
@@ -162,18 +164,18 @@ impl TradingExecutor {
         
         match signal.signal_type {
             SignalType::Buy => {
-                let (sol_quantity, execution_price) = self.execute_buy_signal(signal, &balance).await?;
+                let (sol_quantity, execution_price, usdc_change) = self.execute_buy_signal(signal, &balance).await?;
                 let success = sol_quantity.is_some();
-                Ok((success, sol_quantity, execution_price))
+                Ok((success, sol_quantity, execution_price, usdc_change))
             }
             SignalType::Sell => {
                 // For sell signals, we need the exact quantity that was bought
-                let (success, execution_price) = self.execute_sell_signal(signal, &balance, sell_quantity).await?;
-                Ok((success, None, execution_price)) // No quantity needed for sell
+                let (success, execution_price, usdc_change) = self.execute_sell_signal(signal, &balance, sell_quantity).await?;
+                Ok((success, None, execution_price, usdc_change)) // No quantity needed for sell
             }
             SignalType::Hold => {
                 // Hold signals don't execute trades
-                Ok((false, None, None))
+                Ok((false, None, None, None))
             }
         }
     }
@@ -235,7 +237,7 @@ impl TradingExecutor {
         }
     }
 
-    async fn execute_buy_signal(&self, _signal: &TradingSignal, balance: &WalletBalance) -> Result<(Option<f64>, Option<f64>)> {
+    async fn execute_buy_signal(&self, _signal: &TradingSignal, balance: &WalletBalance) -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
         info!("🟢 Executing BUY signal...");
         
         // Calculate position size based on USDC balance
@@ -243,7 +245,7 @@ impl TradingExecutor {
         
         if position_size_usdc < 1.0 {
             warn!("⚠️  Insufficient USDC balance for trade: ${:.2} USDC", balance.usdc_balance);
-            return Ok((None, None));
+            return Ok((None, None, None));
         }
 
         info!("💰 Using ${:.2} USDC for trade (${:.2} available)", position_size_usdc, balance.usdc_balance);
@@ -261,9 +263,10 @@ impl TradingExecutor {
             }
             if let (Some(sol_change), Some(usdc_change)) = (result.sol_change, result.usdc_change) {
                 info!("💱 Received {:.6} SOL for ${:.2} USDC", sol_change, usdc_change.abs());
-                return Ok((Some(sol_change), result.execution_price));
+                info!("💰 USDC PnL Tracking: Spent ${:.2} USDC for {:.6} SOL", usdc_change.abs(), sol_change);
+                return Ok((Some(sol_change), result.execution_price, Some(usdc_change)));
             }
-            Ok((None, result.execution_price))
+            Ok((None, result.execution_price, None))
         } else {
             let error_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
             error!("❌ BUY trade failed: {}", error_msg);
@@ -271,13 +274,13 @@ impl TradingExecutor {
         }
     }
 
-    async fn execute_sell_signal(&self, _signal: &TradingSignal, balance: &WalletBalance, sell_quantity: Option<f64>) -> Result<(bool, Option<f64>)> {
+    async fn execute_sell_signal(&self, _signal: &TradingSignal, balance: &WalletBalance, sell_quantity: Option<f64>) -> Result<(bool, Option<f64>, Option<f64>)> {
         info!("🔴 Executing SELL signal...");
         
         // For sell signals, we need to check SOL balance
         if balance.sol_balance < 0.001 {
             warn!("⚠️  Insufficient SOL balance for trade: {:.6} SOL", balance.sol_balance);
-            return Ok((false, None));
+            return Ok((false, None, None));
         }
 
         // Use the exact quantity that was bought, not a percentage of current balance
@@ -312,8 +315,10 @@ impl TradingExecutor {
             }
             if let (Some(sol_change), Some(usdc_change)) = (result.sol_change, result.usdc_change) {
                 info!("💱 Traded {:.6} SOL for ${:.2} USDC", sol_change.abs(), usdc_change);
+                info!("💰 USDC PnL Tracking: Received ${:.2} USDC for {:.6} SOL", usdc_change, sol_change.abs());
+                return Ok((true, result.execution_price, Some(usdc_change)));
             }
-            Ok((true, result.execution_price))
+            Ok((true, result.execution_price, None))
         } else {
             let error_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
             error!("❌ SELL trade failed: {}", error_msg);
@@ -616,22 +621,38 @@ impl TradingExecutor {
         Ok(keypair.pubkey().to_string())
     }
 
+    // Store the last transaction result for USDC PnL tracking
+    pub fn store_transaction_result(&mut self, result: TransactionResult) {
+        self.last_transaction_result = Some(result);
+    }
+
+    // Get the last transaction result for USDC PnL calculation
+    pub fn get_last_transaction_result(&self) -> Option<&TransactionResult> {
+        self.last_transaction_result.as_ref()
+    }
+
+    // Get USDC change from last transaction (for PnL tracking)
+    pub fn get_last_usdc_change(&self) -> Option<f64> {
+        self.last_transaction_result.as_ref()?.usdc_change
+    }
+
+    // Get SOL change from last transaction (for quantity tracking)
+    pub fn get_last_sol_change(&self) -> Option<f64> {
+        self.last_transaction_result.as_ref()?.sol_change
+    }
+
     async fn get_last_transaction_sol_quantity(&self) -> Result<Option<f64>> {
-        // This method would extract the SOL quantity from the last transaction result
-        // For now, we'll use a simple approach by checking the transaction output
-        // In a real implementation, you'd store the last transaction result
+        // Use actual transaction result if available
+        if let Some(result) = &self.last_transaction_result {
+            if let Some(sol_change) = result.sol_change {
+                return Ok(Some(sol_change.abs())); // Return absolute value for quantity
+            }
+        }
         
-        // Since we don't have persistent storage of transaction results,
-        // we'll estimate the quantity based on the position size percentage
-        // This is a temporary workaround - ideally you'd store the actual transaction result
-        
+        // Fallback to estimation if no transaction result stored
         let balance = self.get_wallet_balance().await?;
         let position_size_usdc = balance.usdc_balance * self.position_size_percentage;
-        
-        // Estimate SOL quantity based on current price
-        // This is approximate - the actual quantity depends on the exact price at execution
         let estimated_sol_quantity = position_size_usdc / 150.0; // Approximate SOL price
-        
         Ok(Some(estimated_sol_quantity))
     }
 } 

@@ -2,7 +2,7 @@ use crate::models::{PriceFeed, TradingSignal, SignalType};
 use crate::config::Config;
 use crate::neural_enhancement::{NeuralEnhancement, TradeOutcome};
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, Utc, Timelike};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use tracing::{info, warn, debug};
@@ -118,6 +118,15 @@ impl MLStrategy {
     pub async fn enhance_signal(&mut self, signal: &TradingSignal, prices: &[PriceFeed], indicators: &crate::models::TradingIndicators) -> Result<TradingSignal> {
         if !self.ml_enabled {
             return Ok(signal.clone());
+        }
+
+        // Auto-save ML trade data every 5 trades to prevent data loss
+        if self.recent_trades.len() % 5 == 0 && !self.recent_trades.is_empty() {
+            if let Err(e) = self.save_recent_trades_to_database().await {
+                warn!("⚠️ Failed to auto-save ML trade data: {}", e);
+            } else {
+                debug!("💾 ML trade data auto-saved ({} trades)", self.recent_trades.len());
+            }
         }
 
         let features = self.extract_features(prices, indicators)?;
@@ -583,6 +592,29 @@ impl MLStrategy {
             exit_time,
             success,
         })
+    }
+
+    // Auto-save recent trades to database to prevent data loss
+    async fn save_recent_trades_to_database(&self) -> Result<()> {
+        if self.recent_trades.is_empty() {
+            return Ok(());
+        }
+
+        // Save the last 5 trades that haven't been saved yet
+        let trades_to_save: Vec<&TradeResult> = self.recent_trades.iter().rev().take(5).collect();
+        
+        for trade in trades_to_save {
+            // Determine market regime and volatility for context
+            let market_regime = "Auto-saved";
+            let trend_strength = 0.5; // Default values for auto-save
+            let volatility = 0.05;
+            
+            if let Err(e) = self.save_trade_to_database(trade, &self.config.trading_pair, market_regime, trend_strength, volatility).await {
+                warn!("⚠️ Failed to auto-save trade: {}", e);
+            }
+        }
+        
+        Ok(())
     }
 }
 

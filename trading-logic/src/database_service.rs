@@ -118,13 +118,23 @@ impl DatabaseService {
     }
 
     pub async fn create_position(&self, wallet_address: &str, trading_pair: &str, position_type: &str, entry_price: f64, quantity: f64) -> Result<String> {
-        let create_position_request = serde_json::json!({
+        self.create_position_with_usdc(wallet_address, trading_pair, position_type, entry_price, quantity, None).await
+    }
+
+    pub async fn create_position_with_usdc(&self, wallet_address: &str, trading_pair: &str, position_type: &str, entry_price: f64, quantity: f64, usdc_spent: Option<f64>) -> Result<String> {
+        let mut create_position_request = serde_json::json!({
             "wallet_address": wallet_address,
             "pair": trading_pair,
             "position_type": position_type,
             "entry_price": entry_price,
             "quantity": quantity,
         });
+
+        // Add USDC spent if provided (actual USDC flow from transaction)
+        if let Some(usdc_amount) = usdc_spent {
+            create_position_request["usdc_spent"] = serde_json::Value::from(usdc_amount.abs());
+            info!("💰 Recording actual USDC spent: ${:.2}", usdc_amount.abs());
+        }
 
         let url = format!("{}/positions", self.base_url);
         
@@ -166,12 +176,22 @@ impl DatabaseService {
     }
 
     pub async fn close_position(&self, position_id: &str, exit_price: f64) -> Result<()> {
-        let close_request = serde_json::json!({
+        self.close_position_with_usdc(position_id, exit_price, None).await
+    }
+
+    pub async fn close_position_with_usdc(&self, position_id: &str, exit_price: f64, usdc_received: Option<f64>) -> Result<()> {
+        let mut close_request = serde_json::json!({
             "position_id": position_id,
             "exit_price": exit_price,
             "transaction_hash": None::<String>,
             "fees": None::<f64>,
         });
+
+        // Add USDC received if provided (actual USDC flow from transaction)
+        if let Some(usdc_amount) = usdc_received {
+            close_request["usdc_received"] = serde_json::Value::from(usdc_amount.abs());
+            info!("💰 Recording actual USDC received: ${:.2}", usdc_amount.abs());
+        }
 
         let close_url = format!("{}/positions/close", self.base_url);
         let response = self.client.post(&close_url)
@@ -263,5 +283,52 @@ impl DatabaseService {
         }
         
         Ok(())
+    }
+
+    // Neural network performance endpoint
+    pub async fn get_neural_performance(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/neural/performance", self.base_url);
+        
+        let response = self.client.get(&url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await?;
+            
+        if !response.status().is_success() {
+            // Return default neural performance data if endpoint doesn't exist
+            return Ok(serde_json::json!({
+                "enabled": false,
+                "message": "Neural endpoint not available",
+                "learning_rate": 0.01,
+                "total_predictions": 0,
+                "accuracy": 0.0,
+                "confidence": 0.0
+            }));
+        }
+
+        let neural_data: serde_json::Value = response.json().await?;
+        Ok(neural_data)
+    }
+
+    // Neural network insights endpoint
+    pub async fn get_neural_insights(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/neural/insights", self.base_url);
+        
+        let response = self.client.get(&url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await?;
+            
+        if !response.status().is_success() {
+            // Return default insights if endpoint doesn't exist
+            return Ok(serde_json::json!({
+                "enabled": false,
+                "insights": [],
+                "message": "Neural insights not available"
+            }));
+        }
+
+        let insights_data: serde_json::Value = response.json().await?;
+        Ok(insights_data)
     }
 }

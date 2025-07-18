@@ -87,7 +87,13 @@ pub struct OnlineLearner {
     total_predictions: u64,
     correct_predictions: u64,
     learning_rate: f64,
+    initial_learning_rate: f64,
     sequence_length: usize,
+    
+    // Learning rate decay parameters
+    decay_rate: f64,
+    min_learning_rate: f64,
+    performance_window: VecDeque<bool>, // Track recent performance for adaptive decay
 }
 
 #[derive(Debug, Clone)]
@@ -114,7 +120,11 @@ impl OnlineLearner {
             total_predictions: 0,
             correct_predictions: 0,
             learning_rate: config.learning_rate,
+            initial_learning_rate: config.learning_rate,
             sequence_length: config.lstm_sequence_length,
+            decay_rate: 0.995, // Decay by 0.5% per learning step
+            min_learning_rate: 0.001, // Minimum learning rate
+            performance_window: VecDeque::with_capacity(50), // Track last 50 predictions
         }
     }
     
@@ -209,6 +219,15 @@ impl OnlineLearner {
             self.correct_predictions += 1;
         }
         
+        // Update performance window for adaptive learning rate
+        self.performance_window.push_back(success);
+        if self.performance_window.len() > 50 {
+            self.performance_window.pop_front();
+        }
+        
+        // Apply learning rate decay and adaptation
+        self.update_learning_rate();
+        
         // Simple weight adjustment based on outcome
         let adjustment = if success { 
             self.learning_rate 
@@ -235,8 +254,8 @@ impl OnlineLearner {
         self.volatility_weight = self.volatility_weight.max(0.1).min(1.0);
         
         let accuracy = self.correct_predictions as f64 / self.total_predictions as f64;
-        info!("🎓 Neural learning: PnL {:.2}%, Accuracy {:.1}%, Weights [M:{:.2}, R:{:.2}, V:{:.2}]", 
-              outcome.pnl * 100.0, accuracy * 100.0, 
+        info!("🎓 Neural learning: PnL {:.2}%, Accuracy {:.1}%, LR {:.6}, Weights [M:{:.2}, R:{:.2}, V:{:.2}]", 
+              outcome.pnl * 100.0, accuracy * 100.0, self.learning_rate,
               self.momentum_weight, self.rsi_weight, self.volatility_weight);
         
         Ok(())
@@ -276,6 +295,69 @@ impl OnlineLearner {
             self.rsi_weight,
             self.volatility_weight
         )
+    }
+    
+    // Learning rate decay and adaptation
+    fn update_learning_rate(&mut self) {
+        // Apply exponential decay
+        self.learning_rate = (self.learning_rate * self.decay_rate).max(self.min_learning_rate);
+        
+        // Adaptive learning rate based on recent performance
+        if self.performance_window.len() >= 10 {
+            let recent_accuracy = self.performance_window.iter()
+                .rev().take(10)
+                .map(|&success| if success { 1.0 } else { 0.0 })
+                .sum::<f64>() / 10.0;
+            
+            // If performance is poor, increase learning rate slightly
+            if recent_accuracy < 0.4 {
+                self.learning_rate = (self.learning_rate * 1.1).min(self.initial_learning_rate);
+                debug!("🔄 Learning rate increased due to poor performance: {:.6}", self.learning_rate);
+            }
+            // If performance is excellent, decay faster
+            else if recent_accuracy > 0.8 {
+                self.learning_rate = (self.learning_rate * 0.99).max(self.min_learning_rate);
+                debug!("📉 Learning rate decayed due to excellent performance: {:.6}", self.learning_rate);
+            }
+        }
+    }
+    
+    // Get current learning rate for monitoring
+    pub fn get_learning_rate(&self) -> f64 {
+        self.learning_rate
+    }
+    
+    // Get performance metrics for neural endpoint
+    pub fn get_performance_metrics(&self) -> serde_json::Value {
+        let recent_accuracy = if self.performance_window.len() >= 10 {
+            self.performance_window.iter()
+                .rev().take(10)
+                .map(|&success| if success { 1.0 } else { 0.0 })
+                .sum::<f64>() / 10.0
+        } else {
+            self.get_accuracy()
+        };
+        
+        serde_json::json!({
+            "total_predictions": self.total_predictions,
+            "correct_predictions": self.correct_predictions,
+            "overall_accuracy": self.get_accuracy(),
+            "recent_accuracy": recent_accuracy,
+            "learning_rate": self.learning_rate,
+            "initial_learning_rate": self.initial_learning_rate,
+            "min_learning_rate": self.min_learning_rate,
+            "decay_rate": self.decay_rate,
+            "weights": {
+                "momentum": self.momentum_weight,
+                "rsi": self.rsi_weight,
+                "volatility": self.volatility_weight
+            },
+            "performance_window_size": self.performance_window.len(),
+            "learning_progress": {
+                "decay_factor": self.learning_rate / self.initial_learning_rate,
+                "learning_phase": if self.learning_rate > 0.005 { "active" } else { "fine_tuning" }
+            }
+        })
     }
     
     fn calculate_volatility_forecast(&self, prices: &[PriceFeed]) -> f64 {
@@ -647,6 +729,15 @@ impl NeuralEnhancement {
         // Get neural prediction
         let neural_pred = self.learner.predict(prices, indicators)?;
         
+        // Auto-save neural state every 10 predictions to prevent data loss
+        if self.learner.total_predictions % 10 == 0 && self.learner.total_predictions > 0 {
+            if let Err(e) = self.save_neural_state().await {
+                warn!("⚠️ Failed to auto-save neural state: {}", e);
+            } else {
+                debug!("💾 Neural state auto-saved at {} predictions", self.learner.total_predictions);
+            }
+        }
+        
         // Only enhance if neural network is confident
         if neural_pred.confidence < self.config.confidence_threshold {
             debug!("🧠 Neural confidence too low ({:.1}%), using original signal", 
@@ -728,6 +819,99 @@ impl NeuralEnhancement {
     
     pub fn is_ready(&self) -> bool {
         self.enabled && self.learner.total_predictions >= 5
+    }
+    
+    // Get neural performance metrics for API endpoint
+    pub fn get_neural_performance(&self) -> serde_json::Value {
+        if !self.enabled {
+            return serde_json::json!({
+                "enabled": false,
+                "message": "Neural enhancement is disabled"
+            });
+        }
+        
+        let base_metrics = self.learner.get_performance_metrics();
+        let mut performance = base_metrics.as_object().unwrap().clone();
+        
+        // Add additional neural system metrics
+        performance.insert("enabled".to_string(), serde_json::Value::Bool(self.enabled));
+        performance.insert("confidence_threshold".to_string(), serde_json::Value::from(self.config.confidence_threshold));
+        performance.insert("memory_size".to_string(), serde_json::Value::from(self.config.memory_size));
+        performance.insert("lstm_sequence_length".to_string(), serde_json::Value::from(self.config.lstm_sequence_length));
+        performance.insert("is_ready".to_string(), serde_json::Value::Bool(self.is_ready()));
+        
+        // Learning rate analysis
+        let lr_analysis = serde_json::json!({
+            "current_rate": self.learner.get_learning_rate(),
+            "decay_progress": format!("{:.1}%", (1.0 - self.learner.get_learning_rate() / self.learner.initial_learning_rate) * 100.0),
+            "learning_phase": if self.learner.get_learning_rate() > 0.005 { "Active Learning" } else { "Fine Tuning" },
+            "adaptive_adjustments": self.learner.performance_window.len()
+        });
+        performance.insert("learning_rate_analysis".to_string(), lr_analysis);
+        
+        serde_json::Value::Object(performance)
+    }
+    
+    // Get neural insights for dashboard
+    pub fn get_neural_insights(&self) -> serde_json::Value {
+        if !self.enabled {
+            return serde_json::json!({
+                "enabled": false,
+                "insights": []
+            });
+        }
+        
+        let (total_predictions, accuracy, momentum_weight, rsi_weight, volatility_weight) = self.learner.get_learning_stats();
+        
+        let mut insights = Vec::new();
+        
+        // Learning progress insight
+        if total_predictions > 0 {
+            insights.push(serde_json::json!({
+                "type": "learning_progress",
+                "title": "Learning Progress",
+                "value": format!("{} predictions, {:.1}% accuracy", total_predictions, accuracy * 100.0),
+                "confidence": accuracy,
+                "trend": if accuracy > 0.6 { "positive" } else { "neutral" }
+            }));
+        }
+        
+        // Learning rate insight
+        let current_lr = self.learner.get_learning_rate();
+        let lr_phase = if current_lr > 0.005 { "Active" } else { "Fine-tuning" };
+        insights.push(serde_json::json!({
+            "type": "learning_rate",
+            "title": "Learning Rate",
+            "value": format!("{:.6} ({})", current_lr, lr_phase),
+            "confidence": if current_lr > 0.005 { 0.8 } else { 0.6 },
+            "trend": "adaptive"
+        }));
+        
+        // Feature importance insight
+        let dominant_feature = if momentum_weight > rsi_weight && momentum_weight > volatility_weight {
+            "Momentum"
+        } else if rsi_weight > volatility_weight {
+            "RSI"
+        } else {
+            "Volatility"
+        };
+        
+        insights.push(serde_json::json!({
+            "type": "feature_importance",
+            "title": "Dominant Feature",
+            "value": format!("{} ({:.2})", dominant_feature, 
+                if dominant_feature == "Momentum" { momentum_weight }
+                else if dominant_feature == "RSI" { rsi_weight }
+                else { volatility_weight }),
+            "confidence": 0.7,
+            "trend": "stable"
+        }));
+        
+        serde_json::json!({
+            "enabled": true,
+            "insights": insights,
+            "total_insights": insights.len()
+        })
     }
     
     // Load neural network state from database
@@ -836,62 +1020,5 @@ impl NeuralEnhancement {
         
         Ok(())
     }
-    
-    // Get neural performance metrics for dashboard
-    pub fn get_neural_performance(&self) -> serde_json::Value {
-        let (total_predictions, accuracy, momentum_weight, rsi_weight, volatility_weight) = 
-            self.learner.get_learning_stats();
-        
-        serde_json::json!({
-            "accuracy": accuracy,
-            "pattern_confidence": self.calculate_average_pattern_confidence(),
-            "market_regime": "Trending", // This would come from latest prediction
-            "risk_level": self.calculate_average_risk_level(),
-            "total_predictions": total_predictions,
-            "learning_rate": self.learner.learning_rate,
-            "neural_status": if self.enabled { "active" } else { "inactive" },
-            "weights": {
-                "momentum": momentum_weight,
-                "rsi": rsi_weight,
-                "volatility": volatility_weight
-            }
-        })
-    }
-    
-    // Get neural insights for dashboard
-    pub fn get_neural_insights(&self) -> serde_json::Value {
-        // These would typically come from the latest prediction
-        // For now, we'll provide reasonable defaults based on current state
-        let accuracy = self.learner.get_accuracy();
-        
-        serde_json::json!({
-            "price_direction": 0.15, // Slightly bullish
-            "price_direction_confidence": accuracy,
-            "volatility_forecast": 0.35, // Medium volatility
-            "volatility_confidence": accuracy * 0.8,
-            "optimal_position_size": 0.65, // 65% position size
-            "position_confidence": accuracy * 0.9,
-            "reasoning": format!(
-                "Neural network with {:.1}% accuracy analyzing {} predictions. Current weights favor {} indicators. Market patterns suggest {} volatility with {} confidence in directional predictions.",
-                accuracy * 100.0,
-                self.learner.total_predictions,
-                if self.learner.rsi_weight > self.learner.momentum_weight { "RSI" } else { "momentum" },
-                if 0.35 > 0.5 { "low" } else { "high" },
-                if accuracy > 0.7 { "high" } else { "moderate" }
-            )
-        })
-    }
-    
-    fn calculate_average_pattern_confidence(&self) -> f64 {
-        // This would calculate based on recent pattern matches
-        // For now, return a value based on accuracy
-        let base_confidence = self.learner.get_accuracy();
-        (base_confidence * 0.8 + 0.1).min(1.0) // Slightly lower than accuracy
-    }
-    
-    fn calculate_average_risk_level(&self) -> f64 {
-        // Risk level inversely related to accuracy
-        let accuracy = self.learner.get_accuracy();
-        (1.0 - accuracy * 0.6).max(0.2) // Risk between 20% and 80%
-    }
+
 }

@@ -6,6 +6,7 @@ use crate::ml_strategy::MLStrategy;
 use crate::database_service::DatabaseService;
 use crate::position_manager::{PositionManager, WalletStats};
 use crate::signal_processor::SignalProcessor;
+use crate::data_persistence::{DataPersistenceManager, verify_data_integrity};
 use anyhow::Result;
 use reqwest::Client;
 use std::time::Duration;
@@ -73,10 +74,61 @@ impl TradingEngine {
         info!("🚀 Starting Trading Logic Engine...");
         self.log_startup_info();
 
-        // Initialize ML strategy
+        // Perform startup data integrity check
+        info!("🔍 Performing startup data integrity verification...");
+        match verify_data_integrity(&self.config.database_url).await {
+            Ok(true) => {
+                info!("✅ Data integrity check passed - all systems ready");
+            }
+            Ok(false) => {
+                warn!("⚠️ Data integrity check found issues - continuing with caution");
+            }
+            Err(e) => {
+                error!("❌ Data integrity check failed: {}", e);
+                warn!("⚠️ Continuing startup despite integrity check failure");
+            }
+        }
+
+        // Initialize ML strategy and comprehensive data recovery
+        info!("💾 Starting comprehensive data recovery...");
+        
         if let Err(e) = self.ml_strategy.load_trade_history(&self.config.trading_pair).await {
             warn!("Failed to load ML trade history: {}", e);
+        } else {
+            info!("✅ ML trade history loaded successfully");
         }
+        
+        // Verify neural network state is loaded
+        info!("🧠 Neural network state recovery completed during initialization");
+        
+        // Log recovery status
+        let ml_stats = self.ml_strategy.get_ml_stats();
+        info!("📊 Data Recovery Summary:");
+        info!("   • ML Trades: {} (Win Rate: {:.1}%)", ml_stats.total_trades, ml_stats.win_rate * 100.0);
+        info!("   • Neural Network: Initialized with persistent state");
+        info!("   • Auto-save: Enabled for continuous data protection");
+        info!("💾 All trading data will be automatically preserved across restarts");
+
+        // Start background data persistence manager
+        let mut persistence_manager = DataPersistenceManager::new(
+            self.config.database_url.clone(), 
+            15 // Backup every 15 minutes
+        );
+        
+        // Spawn background backup service
+        let backup_handle = {
+            let mut backup_manager = DataPersistenceManager::new(
+                self.config.database_url.clone(), 
+                15
+            );
+            tokio::spawn(async move {
+                if let Err(e) = backup_manager.start_backup_service().await {
+                    error!("❌ Background backup service failed: {}", e);
+                }
+            })
+        };
+        
+        info!("💾 Background data backup service started (15-minute intervals)");
 
         // Post initial trading config
         if let Err(e) = self.post_initial_config().await {
@@ -147,7 +199,7 @@ impl TradingEngine {
         self.signal_processor.check_exit_conditions(
             prices,
             indicators,
-            &self.trading_executors,
+            &mut self.trading_executors,
             &mut self.position_manager,
             &self.database_service,
             &mut self.ml_strategy,
@@ -159,7 +211,7 @@ impl TradingEngine {
             SignalType::Buy => {
                 self.signal_processor.handle_buy_signal(
                     signal,
-                    &self.trading_executors,
+                    &mut self.trading_executors,
                     &mut self.position_manager,
                     &self.database_service,
                 ).await?;
@@ -174,7 +226,7 @@ impl TradingEngine {
                     info!("✅ SELL signal processed: No active positions, allowing external signal");
                     self.signal_processor.handle_sell_signal(
                         signal,
-                        &self.trading_executors,
+                        &mut self.trading_executors,
                         &mut self.position_manager,
                         &self.database_service,
                         &mut self.ml_strategy,

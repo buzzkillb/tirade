@@ -12,6 +12,8 @@ struct DashboardData {
     neural_info: NeuralInfo,
     recent_signals: Vec<TradingSignal>,
     recent_trades: Vec<RecentTrade>,
+    ml_status: serde_json::Value,
+    neural_insights: serde_json::Value,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -20,6 +22,7 @@ struct ActiveTrade {
     buy_price: f64,
     sol_amount: f64,
     current_pnl: f64,
+    pnl_percentage: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -80,17 +83,34 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
         Err(_) => 0.0,
     };
 
-    // Fetch performance metrics for PnL
-    let pnl = match client.get(&format!("{}/performance/metrics", database_url)).send().await {
+    // Fetch USDC-based PnL from closed positions
+    let pnl = match client.get(&format!("{}/positions/pnl_summary", database_url)).send().await {
         Ok(response) => {
             if let Ok(api_response) = response.json::<serde_json::Value>().await {
                 if let Some(data) = api_response.get("data") {
-                    data.get("total_pnl").and_then(|p| p.as_f64()).unwrap_or(0.0)
+                    // Try to get USDC-based PnL first, fallback to price-based PnL
+                    data.get("total_usdc_pnl").and_then(|p| p.as_f64())
+                        .or_else(|| data.get("total_pnl").and_then(|p| p.as_f64()))
+                        .unwrap_or(0.0)
                 } else {
                     0.0
                 }
             } else {
-                0.0
+                // Fallback to old endpoint if new one doesn't exist
+                match client.get(&format!("{}/performance/metrics", database_url)).send().await {
+                    Ok(fallback_response) => {
+                        if let Ok(fallback_data) = fallback_response.json::<serde_json::Value>().await {
+                            if let Some(data) = fallback_data.get("data") {
+                                data.get("total_pnl").and_then(|p| p.as_f64()).unwrap_or(0.0)
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        }
+                    }
+                    Err(_) => 0.0,
+                }
             }
         }
         Err(_) => 0.0,
@@ -110,11 +130,24 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
                                 wallet 
                             };
                             
+                            let entry_price = pos.get("entry_price").and_then(|p| p.as_f64()).unwrap_or(0.0);
+                            let quantity = pos.get("quantity").and_then(|q| q.as_f64()).unwrap_or(0.0);
+                            let current_pnl = pos.get("pnl").and_then(|p| p.as_f64()).unwrap_or(0.0);
+                            
+                            // Calculate PnL percentage based on initial investment
+                            let initial_investment = entry_price * quantity;
+                            let pnl_percentage = if initial_investment > 0.0 {
+                                (current_pnl / initial_investment) * 100.0
+                            } else {
+                                0.0
+                            };
+                            
                             ActiveTrade {
                                 wallet: short_wallet,
-                                buy_price: pos.get("entry_price").and_then(|p| p.as_f64()).unwrap_or(0.0),
-                                sol_amount: pos.get("quantity").and_then(|q| q.as_f64()).unwrap_or(0.0),
-                                current_pnl: pos.get("pnl").and_then(|p| p.as_f64()).unwrap_or(0.0),
+                                buy_price: entry_price,
+                                sol_amount: quantity,
+                                current_pnl,
+                                pnl_percentage,
                             }
                         }).collect()
                     } else {
@@ -130,30 +163,30 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
         Err(_) => vec![],
     };
 
-    // Fetch neural network info
+    // Fetch neural network info with enhanced metrics
     let neural_info = match client.get(&format!("{}/neural/performance", database_url)).send().await {
         Ok(response) => {
-            if let Ok(api_response) = response.json::<serde_json::Value>().await {
-                if let Some(data) = api_response.get("data") {
-                    NeuralInfo {
-                        model_accuracy: data.get("accuracy").and_then(|a| a.as_f64()).unwrap_or(0.0),
-                        prediction_confidence: data.get("confidence").and_then(|c| c.as_f64()).unwrap_or(0.0),
-                        learning_rate: data.get("learning_rate").and_then(|lr| lr.as_f64()).unwrap_or(0.001),
-                        total_predictions: data.get("total_predictions").and_then(|tp| tp.as_u64()).unwrap_or(0) as u32,
-                    }
-                } else {
-                    NeuralInfo {
-                        model_accuracy: 0.0,
-                        prediction_confidence: 0.0,
-                        learning_rate: 0.001,
-                        total_predictions: 0,
-                    }
+            if let Ok(neural_data) = response.json::<serde_json::Value>().await {
+                // Handle both direct response and wrapped response formats
+                let data = neural_data.get("data").unwrap_or(&neural_data);
+                
+                NeuralInfo {
+                    model_accuracy: data.get("overall_accuracy")
+                        .or_else(|| data.get("accuracy"))
+                        .and_then(|a| a.as_f64()).unwrap_or(0.0),
+                    prediction_confidence: data.get("recent_accuracy")
+                        .or_else(|| data.get("confidence"))
+                        .and_then(|c| c.as_f64()).unwrap_or(0.0),
+                    learning_rate: data.get("learning_rate")
+                        .and_then(|lr| lr.as_f64()).unwrap_or(0.01),
+                    total_predictions: data.get("total_predictions")
+                        .and_then(|tp| tp.as_u64()).unwrap_or(0) as u32,
                 }
             } else {
                 NeuralInfo {
                     model_accuracy: 0.0,
                     prediction_confidence: 0.0,
-                    learning_rate: 0.001,
+                    learning_rate: 0.01,
                     total_predictions: 0,
                 }
             }
@@ -161,7 +194,7 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
         Err(_) => NeuralInfo {
             model_accuracy: 0.0,
             prediction_confidence: 0.0,
-            learning_rate: 0.001,
+            learning_rate: 0.01,
             total_predictions: 0,
         },
     };
@@ -279,6 +312,30 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
         Err(_) => vec![],
     };
 
+    // Fetch ML status for additional metrics
+    let ml_status = match client.get(&format!("{}/ml/status", database_url)).send().await {
+        Ok(response) => {
+            if let Ok(ml_data) = response.json::<serde_json::Value>().await {
+                ml_data.get("data").cloned().unwrap_or_else(|| serde_json::json!({}))
+            } else {
+                serde_json::json!({})
+            }
+        }
+        Err(_) => serde_json::json!({}),
+    };
+
+    // Fetch neural insights
+    let neural_insights = match client.get(&format!("{}/neural/insights", database_url)).send().await {
+        Ok(response) => {
+            if let Ok(insights_data) = response.json::<serde_json::Value>().await {
+                insights_data.get("data").cloned().unwrap_or_else(|| serde_json::json!({}))
+            } else {
+                serde_json::json!({})
+            }
+        }
+        Err(_) => serde_json::json!({}),
+    };
+
     let dashboard_data = DashboardData {
         sol_price,
         pnl,
@@ -286,6 +343,8 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
         neural_info,
         recent_signals,
         recent_trades,
+        ml_status,
+        neural_insights,
     };
 
     Ok(HttpResponse::Ok().json(dashboard_data))

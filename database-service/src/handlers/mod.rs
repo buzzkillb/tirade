@@ -630,16 +630,49 @@ pub async fn store_candle(
 pub async fn get_ml_status(
     State(db): State<Arc<Database>>,
 ) -> std::result::Result<Json<ApiResponse<serde_json::Value>>, StatusCode> {
-    // For now, return a default ML status since we don't have ML data in the database yet
-    // In the future, this could fetch from a dedicated ML status table or from the trading logic service
+    // Get real ML statistics from database
+    let mut total_trades = 0;
+    let mut win_rate = 0.0;
+    let mut avg_pnl = 0.0;
+    
+    // Try to get ML stats for SOL/USDC (main trading pair)
+    if let Ok(stats) = db.get_ml_trade_stats("SOL/USDC").await {
+        total_trades = stats.total_trades;
+        win_rate = stats.win_rate;
+        avg_pnl = stats.avg_pnl;
+    }
+    
+    // Get neural network status if available
+    let mut neural_enabled = false;
+    let mut neural_accuracy = 0.0;
+    let mut neural_predictions = 0;
+    let mut learning_rate = 0.01;
+    
+    if let Ok(Some(neural_state)) = db.get_neural_state().await {
+        neural_enabled = true;
+        neural_accuracy = if neural_state.total_predictions > 0 {
+            neural_state.correct_predictions as f64 / neural_state.total_predictions as f64
+        } else {
+            0.0
+        };
+        neural_predictions = neural_state.total_predictions;
+        learning_rate = neural_state.learning_rate;
+    }
     
     let ml_status = serde_json::json!({
         "enabled": std::env::var("ML_ENABLED").unwrap_or_else(|_| "true".to_string()).parse::<bool>().unwrap_or(true),
-        "min_confidence": std::env::var("ML_MIN_CONFIDENCE").unwrap_or_else(|_| "0.75".to_string()).parse::<f64>().unwrap_or(0.75),
+        "min_confidence": std::env::var("ML_MIN_CONFIDENCE").unwrap_or_else(|_| "0.55".to_string()).parse::<f64>().unwrap_or(0.55),
         "max_position_size": std::env::var("ML_MAX_POSITION_SIZE").unwrap_or_else(|_| "0.9".to_string()).parse::<f64>().unwrap_or(0.9),
-        "total_trades": 0, // Will be updated when ML trades are tracked
-        "win_rate": 0.0,   // Will be updated when ML trades are tracked
-        "avg_pnl": 0.0,    // Will be updated when ML trades are tracked
+        "total_trades": total_trades,
+        "win_rate": win_rate,
+        "avg_pnl": avg_pnl,
+        "neural": {
+            "enabled": neural_enabled,
+            "accuracy": neural_accuracy,
+            "total_predictions": neural_predictions,
+            "learning_rate": learning_rate
+        },
+        "last_updated": chrono::Utc::now().to_rfc3339()
     });
     
     Ok(Json(ApiResponse::success(ml_status)))

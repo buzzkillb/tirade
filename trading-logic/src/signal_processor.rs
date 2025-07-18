@@ -23,7 +23,7 @@ impl SignalProcessor {
     pub async fn handle_buy_signal(
         &mut self,
         signal: &TradingSignal,
-        executors: &[TradingExecutor],
+        executors: &mut [TradingExecutor],
         position_manager: &mut PositionManager,
         database: &DatabaseService,
     ) -> Result<()> {
@@ -43,7 +43,7 @@ impl SignalProcessor {
                       executor.get_wallet_name(), wallet_index + 1);
                 
                 match executor.execute_signal(signal, None).await {
-                    Ok((success, quantity, execution_price)) => {
+                    Ok((success, quantity, execution_price, usdc_change)) => {
                         if success {
                             // Use actual execution price from Jupiter, fallback to signal price
                             let entry_price = execution_price.unwrap_or(signal.price);
@@ -60,14 +60,23 @@ impl SignalProcessor {
                                 position_type: PositionType::Long,
                             };
 
-                            // Post to database and get position ID
+                            // Post to database with actual USDC spent from transaction
                             let wallet_address = executor.get_wallet_address()?;
-                            match database.create_position(
+                            
+                            // Use USDC change from transaction result (negative = spent)
+                            let usdc_spent = usdc_change.filter(|&change| change < 0.0);
+                            
+                            if let Some(usdc_amount) = usdc_spent {
+                                info!("💰 USDC-based PnL: Recording ${:.2} USDC spent for position entry", usdc_amount.abs());
+                            }
+                            
+                            match database.create_position_with_usdc(
                                 &wallet_address,
                                 &self.trading_pair,
                                 "long",
                                 position.entry_price,
-                                position.quantity
+                                position.quantity,
+                                usdc_spent
                             ).await {
                                 Ok(position_id) => {
                                     let mut updated_position = position;
@@ -102,7 +111,7 @@ impl SignalProcessor {
                         info!("💰 {} executing BUY signal (fallback)", fallback_executor.get_wallet_name());
                         
                         match fallback_executor.execute_signal(signal, None).await {
-                            Ok((success, quantity, execution_price)) => {
+                            Ok((success, quantity, execution_price, usdc_change)) => {
                                 if success {
                                     // Use actual execution price from Jupiter, fallback to signal price
                                     let entry_price = execution_price.unwrap_or(signal.price);
@@ -119,12 +128,21 @@ impl SignalProcessor {
                                     };
 
                                     let wallet_address = fallback_executor.get_wallet_address()?;
-                                    match database.create_position(
+                                    
+                                    // Use USDC change from transaction result (negative = spent)
+                                    let usdc_spent = usdc_change.filter(|&change| change < 0.0);
+                                    
+                                    if let Some(usdc_amount) = usdc_spent {
+                                        info!("💰 USDC-based PnL: Recording ${:.2} USDC spent for fallback position entry", usdc_amount.abs());
+                                    }
+                                    
+                                    match database.create_position_with_usdc(
                                         &wallet_address,
                                         &self.trading_pair,
                                         "long",
                                         position.entry_price,
-                                        position.quantity
+                                        position.quantity,
+                                        usdc_spent
                                     ).await {
                                         Ok(position_id) => {
                                             let mut updated_position = position;
@@ -159,7 +177,7 @@ impl SignalProcessor {
     pub async fn handle_sell_signal(
         &self,
         signal: &TradingSignal,
-        executors: &[TradingExecutor],
+        executors: &mut [TradingExecutor],
         position_manager: &mut PositionManager,
         database: &DatabaseService,
         ml_strategy: &mut MLStrategy,
@@ -178,7 +196,7 @@ impl SignalProcessor {
             
             // Execute the trade
             match executor.execute_signal(signal, Some(position.quantity)).await {
-                Ok((success, _, execution_price)) => {
+                Ok((success, _, execution_price, usdc_change)) => {
                     if success {
                         // Use actual execution price from Jupiter, fallback to signal price
                         let exit_price = execution_price.unwrap_or(signal.price);
@@ -186,12 +204,19 @@ impl SignalProcessor {
                         info!("💱 {} using exit price: ${:.4} (Jupiter: {:?}, Signal: ${:.4})", 
                               executor.get_wallet_name(), exit_price, execution_price, signal.price);
                         
-                        // Calculate PnL using actual execution prices
-                        let pnl = (exit_price - position.entry_price) / position.entry_price;
+                        // Calculate PnL using actual execution prices (fallback method)
+                        let price_based_pnl = (exit_price - position.entry_price) / position.entry_price;
                         
-                        // Database operations - use actual exit price
+                        // Use USDC change from transaction result (positive = received)
+                        let usdc_received = usdc_change.filter(|&change| change > 0.0);
+                        
+                        if let Some(usdc_amount) = usdc_received {
+                            info!("💰 USDC-based PnL: Received ${:.2} USDC for position exit", usdc_amount);
+                        }
+                        
+                        // Database operations - use actual exit price and USDC received
                         if let Some(position_id) = &position.position_id {
-                            match database.close_position(position_id, exit_price).await {
+                            match database.close_position_with_usdc(position_id, exit_price, usdc_received).await {
                                 Ok(_) => {
                                     info!("✅ {} position closed in database with exit price ${:.4}", 
                                           executor.get_wallet_name(), exit_price);
@@ -203,24 +228,24 @@ impl SignalProcessor {
                             }
                         }
 
-                        // Record trade result for ML - use actual exit price
+                        // Record trade result for ML - use price-based PnL as fallback
                         let trade_result = TradeResult {
                             entry_price: position.entry_price,
                             exit_price,
-                            pnl,
+                            pnl: price_based_pnl,
                             duration_seconds: (signal.timestamp - position.entry_time).num_seconds(),
                             entry_time: position.entry_time,
                             exit_time: signal.timestamp,
-                            success: pnl > 0.0,
+                            success: price_based_pnl > 0.0,
                         };
                         ml_strategy.record_trade(trade_result).await;
 
                         // Clear position from memory
                         position_manager.clear_position(wallet_index);
                         
-                        let pnl_emoji = if pnl > 0.0 { "💰" } else { "💸" };
+                        let pnl_emoji = if price_based_pnl > 0.0 { "💰" } else { "💸" };
                         info!("✅ {} closed BEST PERFORMING position: {} PnL: {:.2}% (staggered exit)", 
-                              executor.get_wallet_name(), pnl_emoji, pnl * 100.0);
+                              executor.get_wallet_name(), pnl_emoji, price_based_pnl * 100.0);
                         
                         // Show remaining positions
                         let remaining_positions = executors.iter().enumerate()
@@ -247,7 +272,7 @@ impl SignalProcessor {
         &self,
         prices: &[PriceFeed],
         indicators: &crate::models::TradingIndicators,
-        executors: &[TradingExecutor],
+        executors: &mut [TradingExecutor],
         position_manager: &mut PositionManager,
         database: &DatabaseService,
         ml_strategy: &mut MLStrategy,
@@ -281,19 +306,19 @@ impl SignalProcessor {
                       executor.get_wallet_name(), position.entry_price, current_price, pnl * 100.0);
                 
                 // Detailed condition checking with individual logging
-                let rsi_overbought_condition = rsi > 70.0 && pnl > 0.008;
-                let momentum_decay_condition = momentum_decay && pnl > 0.008;
-                let take_profit_condition = pnl > 0.012;
-                let stop_loss_condition = pnl < -0.01;
+                let rsi_overbought_condition = rsi > 70.0 && pnl > 0.014;  // 1.4% for RSI overbought
+                let momentum_decay_condition = momentum_decay && pnl > 0.014;  // 1.4% for momentum decay
+                let take_profit_condition = pnl > 0.02;  // 2.0% for pure take profit
+                let stop_loss_condition = pnl < -0.012;  // -1.2% for stop loss
                 
                 info!("🎯 EXIT CONDITION ANALYSIS for {}:", executor.get_wallet_name());
-                info!("   RSI Overbought Exit: RSI={:.1} > 70.0 && PnL={:.2}% > 0.8% = {}", 
+                info!("   RSI Overbought Exit: RSI={:.1} > 70.0 && PnL={:.2}% > 1.4% = {}", 
                       rsi, pnl * 100.0, rsi_overbought_condition);
-                info!("   Momentum Decay Exit: Decay={} && PnL={:.2}% > 0.8% = {}", 
+                info!("   Momentum Decay Exit: Decay={} && PnL={:.2}% > 1.4% = {}", 
                       momentum_decay, pnl * 100.0, momentum_decay_condition);
-                info!("   Take Profit Exit: PnL={:.2}% > 1.2% = {}", 
+                info!("   Take Profit Exit: PnL={:.2}% > 2.0% = {}", 
                       pnl * 100.0, take_profit_condition);
-                info!("   Stop Loss Exit: PnL={:.2}% < -1.0% = {}", 
+                info!("   Stop Loss Exit: PnL={:.2}% < -1.2% = {}", 
                       pnl * 100.0, stop_loss_condition);
                 
                 // Smart exit strategy: Technical protection + profit targets
@@ -301,13 +326,13 @@ impl SignalProcessor {
                 
                 if should_exit {
                     let exit_reason = if stop_loss_condition {
-                        "STOP LOSS (-1.0%)"
+                        "STOP LOSS (-1.2%)"
                     } else if take_profit_condition {
-                        "TAKE PROFIT (+1.2%)"
+                        "TAKE PROFIT (+2.0%)"
                     } else if rsi_overbought_condition {
-                        "RSI OVERBOUGHT (+0.8%)"
+                        "RSI OVERBOUGHT (+1.4%)"
                     } else if momentum_decay_condition {
-                        "MOMENTUM DECAY (+0.8%)"
+                        "MOMENTUM DECAY (+1.4%)"
                     } else {
                         "UNKNOWN"
                     };
@@ -325,7 +350,7 @@ impl SignalProcessor {
                     };
                     
                     // Execute sell for this specific wallet
-                    if let Ok((success, _, execution_price)) = executor.execute_signal(&exit_signal, Some(position.quantity)).await {
+                    if let Ok((success, _, execution_price, usdc_change)) = executor.execute_signal(&exit_signal, Some(position.quantity)).await {
                         if success {
                             // Use actual execution price from Jupiter, fallback to current price
                             let exit_price = execution_price.unwrap_or(current_price);
@@ -333,9 +358,16 @@ impl SignalProcessor {
                             // Recalculate PnL with actual exit price
                             let actual_pnl = (exit_price - position.entry_price) / position.entry_price;
                             
-                            // Handle position closure
+                            // Use USDC change from transaction result (positive = received)
+                            let usdc_received = usdc_change.filter(|&change| change > 0.0);
+                            
+                            if let Some(usdc_amount) = usdc_received {
+                                info!("💰 USDC-based PnL: Received ${:.2} USDC for exit condition", usdc_amount);
+                            }
+                            
+                            // Handle position closure with USDC received
                             if let Some(position_id) = &position.position_id {
-                                if let Err(e) = database.close_position(position_id, exit_price).await {
+                                if let Err(e) = database.close_position_with_usdc(position_id, exit_price, usdc_received).await {
                                     error!("❌ Failed to close position in database: {}", e);
                                 }
                             }

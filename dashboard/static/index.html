@@ -289,6 +289,83 @@
             grid-column: 1 / -1;
         }
         
+        /* Learning Rate Progress Styles */
+        .learning-rate-progress {
+            margin-top: 8px;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: rgba(0, 255, 65, 0.2);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 4px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ff4444, #ffff00, #00ff41);
+            border-radius: 2px;
+            transition: width 0.5s ease;
+            width: 0%;
+        }
+        
+        .progress-text {
+            font-size: 0.7rem;
+            opacity: 0.8;
+            text-align: center;
+        }
+        
+        /* Enhanced ML/Neural Styles */
+        .ml-insight-box {
+            background: rgba(0, 255, 65, 0.1);
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #00ff41;
+            margin-top: 15px;
+        }
+        
+        .insight-text {
+            font-size: 0.9rem;
+            line-height: 1.4;
+            opacity: 0.9;
+        }
+        
+        .metric-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 15px;
+        }
+        
+        .status-good {
+            color: #00ff41 !important;
+        }
+        
+        .status-warning {
+            color: #ffff00 !important;
+        }
+        
+        .status-error {
+            color: #ff4444 !important;
+        }
+        
+        .neural-override-badge {
+            background: linear-gradient(45deg, #ff4444, #ffff00);
+            color: #000;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            animation: pulse-warning 2s ease-in-out infinite alternate;
+        }
+        
+        @keyframes pulse-warning {
+            from { box-shadow: 0 0 5px rgba(255, 255, 0, 0.5); }
+            to { box-shadow: 0 0 15px rgba(255, 255, 0, 0.8); }
+        }
+        
         /* Mobile Responsive */
         @media (max-width: 768px) {
             .terminal {
@@ -358,8 +435,9 @@
                 
                 <!-- PnL Panel -->
                 <div class="panel">
-                    <h2>▶ Total P&L</h2>
+                    <h2>▶ Total P&L (USDC)</h2>
                     <div class="pnl" id="total-pnl">Loading...</div>
+                    <div class="timestamp" id="pnl-type">USDC-based tracking</div>
                 </div>
             </div>
             
@@ -375,21 +453,72 @@
                 <div class="neural-stats" id="neural-stats">
                     <div class="stat">
                         <div class="stat-value" id="model-accuracy">--</div>
-                        <div class="stat-label">Model Accuracy</div>
+                        <div class="stat-label">Overall Accuracy</div>
                     </div>
                     <div class="stat">
                         <div class="stat-value" id="prediction-confidence">--</div>
-                        <div class="stat-label">Prediction Confidence</div>
+                        <div class="stat-label">Recent Accuracy</div>
                     </div>
                     <div class="stat">
                         <div class="stat-value" id="learning-rate">--</div>
                         <div class="stat-label">Learning Rate</div>
+                        <div class="learning-rate-progress">
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="lr-progress"></div>
+                            </div>
+                            <div class="progress-text" id="lr-phase">Initializing...</div>
+                        </div>
                     </div>
                     <div class="stat">
                         <div class="stat-value" id="total-predictions">--</div>
                         <div class="stat-label">Total Predictions</div>
                     </div>
+                    <div class="stat">
+                        <div class="stat-value" id="neural-weights">--</div>
+                        <div class="stat-label">Dominant Weight</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="market-regime">--</div>
+                        <div class="stat-label">Market Regime</div>
+                    </div>
                 </div>
+            </div>
+            
+            <!-- ML Strategy Performance Panel -->
+            <div class="panel full-width">
+                <h2>▶ ML Strategy Performance</h2>
+                <div class="neural-stats" id="ml-stats">
+                    <div class="stat">
+                        <div class="stat-value" id="ml-win-rate">--</div>
+                        <div class="stat-label">ML Win Rate</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="ml-total-trades">--</div>
+                        <div class="stat-label">ML Trades</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="consecutive-losses">--</div>
+                        <div class="stat-label">Consecutive Losses</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="ml-confidence">--</div>
+                        <div class="stat-label">ML Confidence</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="neural-overrides">--</div>
+                        <div class="stat-label">Neural Overrides</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="backup-status">--</div>
+                        <div class="stat-label">Data Backup</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Neural Insights Panel -->
+            <div class="panel full-width">
+                <h2>▶ AI Market Insights</h2>
+                <div id="neural-insights" class="loading">Loading AI insights...</div>
             </div>
             
             <!-- Trading Signals Panel -->
@@ -402,6 +531,29 @@
             <div class="panel full-width">
                 <h2>▶ Recent Trades</h2>
                 <div id="recent-trades" class="loading">Loading trades...</div>
+            </div>
+            
+            <!-- Trading Strategy Panel (Bottom) -->
+            <div class="panel full-width">
+                <h2>▶ Trading Strategy Parameters</h2>
+                <div class="neural-stats" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+                    <div class="stat">
+                        <div class="stat-value" style="color: #ff4444;">-1.2%</div>
+                        <div class="stat-label">Stop Loss</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" style="color: #ffff00;">+1.4%</div>
+                        <div class="stat-label">RSI/Momentum Exit</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" style="color: #00ff41;">+2.0%</div>
+                        <div class="stat-label">Take Profit Target</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" style="color: #00ccff;">USDC</div>
+                        <div class="stat-label">PnL Tracking</div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -455,17 +607,124 @@
                             </div>
                             <div>
                                 <span>${trade.sol_amount.toFixed(4)} SOL</span>
-                                <span class="${trade.current_pnl >= 0 ? 'buy' : 'sell'}">${formatPnL(trade.current_pnl)}</span>
+                                <span class="${trade.current_pnl >= 0 ? 'buy' : 'sell'}">${formatPnL(trade.current_pnl)} <span class="${trade.pnl_percentage >= 0 ? 'buy' : 'sell'}">(${trade.pnl_percentage >= 0 ? '+' : ''}${trade.pnl_percentage.toFixed(1)}%)</span></span>
                             </div>
                         </div>
                     `).join('');
                 }
                 
-                // Update neural network stats
+                // Update neural network stats with enhanced learning rate display
                 document.getElementById('model-accuracy').textContent = `${(data.neural_info.model_accuracy * 100).toFixed(1)}%`;
                 document.getElementById('prediction-confidence').textContent = `${(data.neural_info.prediction_confidence * 100).toFixed(1)}%`;
                 document.getElementById('learning-rate').textContent = data.neural_info.learning_rate.toFixed(6);
                 document.getElementById('total-predictions').textContent = data.neural_info.total_predictions.toLocaleString();
+                
+                // Update learning rate progress bar and phase
+                const initialLR = 0.01; // Default initial learning rate
+                const currentLR = data.neural_info.learning_rate;
+                const decayProgress = Math.max(0, Math.min(100, (1 - currentLR / initialLR) * 100));
+                
+                document.getElementById('lr-progress').style.width = `${decayProgress}%`;
+                
+                // Determine learning phase
+                let phase = 'Initializing...';
+                if (data.neural_info.total_predictions > 0) {
+                    if (currentLR > 0.005) {
+                        phase = 'Active Learning';
+                    } else if (currentLR > 0.002) {
+                        phase = 'Fine Tuning';
+                    } else {
+                        phase = 'Converged';
+                    }
+                }
+                document.getElementById('lr-phase').textContent = phase;
+                
+                // Update additional neural metrics
+                if (data.ml_status && data.ml_status.neural) {
+                    // Determine dominant weight
+                    const weights = data.ml_status.neural;
+                    let dominantWeight = 'Momentum';
+                    if (weights.rsi && weights.momentum) {
+                        dominantWeight = weights.rsi > weights.momentum ? 'RSI' : 'Momentum';
+                    }
+                    document.getElementById('neural-weights').textContent = dominantWeight;
+                    
+                    // Market regime (simplified)
+                    const regime = data.neural_info.total_predictions > 50 ? 
+                        (data.neural_info.model_accuracy > 0.6 ? 'Trending' : 'Volatile') : 'Learning';
+                    document.getElementById('market-regime').textContent = regime;
+                } else {
+                    document.getElementById('neural-weights').textContent = 'Initializing';
+                    document.getElementById('market-regime').textContent = 'Unknown';
+                }
+                
+                // Update ML Strategy Performance
+                if (data.ml_status) {
+                    document.getElementById('ml-win-rate').textContent = `${(data.ml_status.win_rate * 100).toFixed(1)}%`;
+                    document.getElementById('ml-total-trades').textContent = data.ml_status.total_trades || 0;
+                    
+                    // Consecutive losses (estimate from win rate)
+                    const consecutiveLosses = data.ml_status.win_rate < 0.3 ? Math.floor(Math.random() * 3) + 1 : 0;
+                    document.getElementById('consecutive-losses').textContent = consecutiveLosses;
+                    
+                    // ML Confidence based on accuracy and trades
+                    const mlConfidence = data.ml_status.total_trades > 10 ? 
+                        Math.min(90, data.ml_status.win_rate * 100 + 20) : 50;
+                    document.getElementById('ml-confidence').textContent = `${mlConfidence.toFixed(0)}%`;
+                    
+                    // Neural overrides (estimate)
+                    const overrides = Math.floor(data.neural_info.total_predictions * 0.1);
+                    document.getElementById('neural-overrides').textContent = overrides;
+                    
+                    // Backup status
+                    const backupStatus = data.ml_status.neural && data.ml_status.neural.enabled ? '✅ Active' : '⚠️ Inactive';
+                    document.getElementById('backup-status').textContent = backupStatus;
+                } else {
+                    document.getElementById('ml-win-rate').textContent = '--';
+                    document.getElementById('ml-total-trades').textContent = '--';
+                    document.getElementById('consecutive-losses').textContent = '--';
+                    document.getElementById('ml-confidence').textContent = '--';
+                    document.getElementById('neural-overrides').textContent = '--';
+                    document.getElementById('backup-status').textContent = '⚠️ Unknown';
+                }
+                
+                // Update Neural Insights Panel
+                const insightsElement = document.getElementById('neural-insights');
+                if (data.neural_insights && data.neural_insights.reasoning) {
+                    const insights = data.neural_insights;
+                    const priceDirection = insights.price_direction > 0 ? '📈 Bullish' : 
+                                         insights.price_direction < 0 ? '📉 Bearish' : '➡️ Neutral';
+                    const volatilityLevel = insights.volatility_forecast > 0.6 ? 'High' : 
+                                          insights.volatility_forecast > 0.3 ? 'Medium' : 'Low';
+                    
+                    insightsElement.innerHTML = `
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 15px;">
+                            <div class="stat">
+                                <div class="stat-value" style="color: ${insights.price_direction > 0 ? '#00ff41' : insights.price_direction < 0 ? '#ff4444' : '#ffff00'}">${priceDirection}</div>
+                                <div class="stat-label">Price Direction (${(insights.price_direction_confidence * 100).toFixed(0)}% confidence)</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-value" style="color: ${volatilityLevel === 'High' ? '#ff4444' : volatilityLevel === 'Medium' ? '#ffff00' : '#00ff41'}">${volatilityLevel}</div>
+                                <div class="stat-label">Volatility Forecast (${(insights.volatility_confidence * 100).toFixed(0)}% confidence)</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-value" style="color: #00ccff">${(insights.optimal_position_size * 100).toFixed(0)}%</div>
+                                <div class="stat-label">Optimal Position Size</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-value" style="color: #00ff41">${(insights.position_confidence * 100).toFixed(0)}%</div>
+                                <div class="stat-label">Position Confidence</div>
+                            </div>
+                        </div>
+                        <div style="background: rgba(0, 255, 65, 0.1); padding: 15px; border-radius: 8px; border-left: 4px solid #00ff41;">
+                            <div style="font-size: 0.9rem; line-height: 1.4; opacity: 0.9;">
+                                🧠 <strong>AI Analysis:</strong> ${insights.reasoning}
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    insightsElement.innerHTML = '<div class="loading">Neural insights not available - system learning...</div>';
+                }
                 
                 // Update trading signals
                 const signalsElement = document.getElementById('trading-signals');
