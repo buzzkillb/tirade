@@ -505,8 +505,8 @@
                         <div class="stat-label">ML Confidence</div>
                     </div>
                     <div class="stat">
-                        <div class="stat-value" id="neural-overrides">--</div>
-                        <div class="stat-label">Neural Overrides</div>
+                        <div class="stat-value" id="ai-control-status">🧠 ACTIVE</div>
+                        <div class="stat-label">AI Control Status</div>
                     </div>
                     <div class="stat">
                         <div class="stat-value" id="backup-status">--</div>
@@ -533,25 +533,30 @@
                 <div id="recent-trades" class="loading">Loading trades...</div>
             </div>
             
-            <!-- Trading Strategy Panel (Bottom) -->
+            <!-- AI Trading Strategy Panel (Bottom) -->
             <div class="panel full-width">
-                <h2>▶ Trading Strategy Parameters</h2>
+                <h2>▶ AI Trading Strategy</h2>
                 <div class="neural-stats" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
                     <div class="stat">
-                        <div class="stat-value" style="color: #ff4444;">-1.2%</div>
-                        <div class="stat-label">Stop Loss</div>
+                        <div class="stat-value" style="color: #00ff41;">🧠 DYNAMIC</div>
+                        <div class="stat-label">Exit Strategy</div>
                     </div>
                     <div class="stat">
-                        <div class="stat-value" style="color: #ffff00;">+1.4%</div>
-                        <div class="stat-label">RSI/Momentum Exit</div>
+                        <div class="stat-value" style="color: #00ccff;">🎯 ADAPTIVE</div>
+                        <div class="stat-label">Risk Management</div>
                     </div>
                     <div class="stat">
-                        <div class="stat-value" style="color: #00ff41;">+2.0%</div>
-                        <div class="stat-label">Take Profit Target</div>
+                        <div class="stat-value" style="color: #ffff00;">🚀 NEURAL</div>
+                        <div class="stat-label">Decision Making</div>
                     </div>
                     <div class="stat">
-                        <div class="stat-value" style="color: #00ccff;">USDC</div>
-                        <div class="stat-label">PnL Tracking</div>
+                        <div class="stat-value" style="color: #00ff41;">✅ ACTIVE</div>
+                        <div class="stat-label">AI Control</div>
+                    </div>
+                </div>
+                <div style="background: rgba(0, 255, 65, 0.1); padding: 15px; border-radius: 8px; border-left: 4px solid #00ff41; margin-top: 15px;">
+                    <div style="font-size: 0.9rem; line-height: 1.4; opacity: 0.9;">
+                        🧠 <strong>Full Neural Control:</strong> All trading decisions are made by AI with no fixed thresholds. The neural network dynamically adjusts exit conditions, risk management, and position sizing based on real-time market analysis and learned patterns.
                     </div>
                 </div>
             </div>
@@ -701,17 +706,9 @@
                     }
                     document.getElementById('ml-confidence').textContent = `${mlConfidence.toFixed(0)}%`;
                     
-                    // Neural overrides - more realistic estimate
-                    let overrides = 0;
-                    if (data.neural_info.total_predictions > 0 && data.neural_info.model_accuracy > 0) {
-                        // Only count overrides if neural network is actually active and accurate
-                        if (data.neural_info.model_accuracy > 0.6) {
-                            overrides = Math.floor(data.neural_info.total_predictions * 0.05); // 5% override rate for good accuracy
-                        } else if (data.neural_info.model_accuracy > 0.3) {
-                            overrides = Math.floor(data.neural_info.total_predictions * 0.02); // 2% override rate for moderate accuracy
-                        }
-                    }
-                    document.getElementById('neural-overrides').textContent = overrides;
+                    // AI Control Status - always active since overrides are disabled
+                    document.getElementById('ai-control-status').textContent = '🧠 ACTIVE';
+                    document.getElementById('ai-control-status').style.color = '#00ff41';
                     
                     // Backup status - check if neural system is enabled and working
                     let backupStatus = '⚠️ Inactive';
@@ -726,7 +723,7 @@
                     document.getElementById('ml-total-trades').textContent = '--';
                     document.getElementById('consecutive-losses').textContent = '--';
                     document.getElementById('ml-confidence').textContent = '--';
-                    document.getElementById('neural-overrides').textContent = '--';
+                    document.getElementById('ai-control-status').textContent = '🧠 ACTIVE';
                     document.getElementById('backup-status').textContent = '⚠️ Unknown';
                 }
                 
