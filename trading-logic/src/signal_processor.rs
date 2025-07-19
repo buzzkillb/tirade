@@ -402,14 +402,14 @@ impl SignalProcessor {
                 // 🧠 DYNAMIC CONFIDENCE SYSTEM: Apply exit conditions based on override level
                 let should_exit = match override_thresholds {
                     None => {
-                        // NO OVERRIDES: Full neural control - only technical indicators
-                        let rsi_overbought_condition = rsi > 75.0 && pnl > 0.005;  // Looser RSI condition
-                        let momentum_decay_condition = momentum_decay && pnl > 0.005;  // Looser momentum condition
+                        // NO OVERRIDES: Full neural control - pure technical indicators
+                        let rsi_overbought_condition = rsi > 75.0;  // Pure RSI signal
+                        let momentum_decay_condition = momentum_decay;  // Pure momentum signal
                         
-                        info!("🧠 {} NEURAL CONTROL: RSI={:.1} > 75.0 && PnL={:.2}% > 0.5% = {}", 
-                              executor.get_wallet_name(), rsi, pnl * 100.0, rsi_overbought_condition);
-                        info!("🧠 {} NEURAL CONTROL: Momentum Decay={} && PnL={:.2}% > 0.5% = {}", 
-                              executor.get_wallet_name(), momentum_decay, pnl * 100.0, momentum_decay_condition);
+                        info!("🧠 {} NEURAL CONTROL: RSI={:.1} > 75.0 = {}", 
+                              executor.get_wallet_name(), rsi, rsi_overbought_condition);
+                        info!("🧠 {} NEURAL CONTROL: Momentum Decay={} = {}", 
+                              executor.get_wallet_name(), momentum_decay, momentum_decay_condition);
                         
                         rsi_overbought_condition || momentum_decay_condition
                     },
