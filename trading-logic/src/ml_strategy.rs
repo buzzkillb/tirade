@@ -494,6 +494,17 @@ impl MLStrategy {
             }
         }
         
+        // 💾 Always save trade to database for ML persistence
+        let market_regime = "Recorded";
+        let trend_strength = 0.5; // Default values
+        let volatility = 0.05;
+        
+        if let Err(e) = self.save_trade_to_database(&trade_result, &self.config.trading_pair, market_regime, trend_strength, volatility).await {
+            warn!("⚠️ Failed to save ML trade to database: {}", e);
+        } else {
+            info!("💾 ML trade saved to database for persistence");
+        }
+        
         info!("🤖 ML+Neural Trade Recorded - PnL: {:.2}%, Success: {}, Neural: {}", 
               trade_result.pnl * 100.0, 
               trade_result.success,
@@ -540,8 +551,11 @@ impl MLStrategy {
     }
 
     pub async fn load_trade_history(&mut self, pair: &str) -> Result<()> {
-        // Increased from 50 to 200 for better ML learning with multiwallet
-        let url = format!("{}/ml/trades/{}?limit=200", self.database_url, pair);
+        // URL encode the pair to handle special characters like "/"
+        let encoded_pair = urlencoding::encode(pair);
+        let url = format!("{}/ml/trades/{}?limit=200", self.database_url, encoded_pair);
+        
+        info!("🔍 Loading ML trade history from: {}", url);
         
         match self.db_client.get(&url).send().await {
             Ok(response) => {
@@ -553,15 +567,23 @@ impl MLStrategy {
                                     self.recent_trades.push_back(trade);
                                 }
                             }
-                            info!("🤖 Loaded {} trades from database for ML learning", self.recent_trades.len());
+                            info!("🤖 Loaded {} ML trades from database for learning", self.recent_trades.len());
+                            if self.recent_trades.is_empty() {
+                                info!("📊 No existing ML trade history found - starting fresh");
+                            }
+                        } else {
+                            info!("📊 No ML trade data array found in response");
                         }
+                    } else {
+                        warn!("⚠️ Failed to parse ML trade history response as JSON");
                     }
                 } else {
-                    warn!("⚠️ Failed to load trade history: HTTP {}", response.status());
+                    warn!("⚠️ Failed to load ML trade history: HTTP {} from {}", response.status(), url);
                 }
             }
             Err(e) => {
-                warn!("⚠️ Failed to load trade history: {}", e);
+                warn!("⚠️ Failed to connect to database for ML trade history: {}", e);
+                warn!("🔗 Database URL: {}", self.database_url);
             }
         }
         

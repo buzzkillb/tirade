@@ -83,34 +83,18 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
         Err(_) => 0.0,
     };
 
-    // Fetch USDC-based PnL from closed positions
-    let pnl = match client.get(&format!("{}/positions/pnl_summary", database_url)).send().await {
+    // Fetch USDC-based PnL from performance metrics (already includes USDC-based calculation)
+    let pnl = match client.get(&format!("{}/performance/metrics", database_url)).send().await {
         Ok(response) => {
             if let Ok(api_response) = response.json::<serde_json::Value>().await {
                 if let Some(data) = api_response.get("data") {
-                    // Try to get USDC-based PnL first, fallback to price-based PnL
-                    data.get("total_usdc_pnl").and_then(|p| p.as_f64())
-                        .or_else(|| data.get("total_pnl").and_then(|p| p.as_f64()))
-                        .unwrap_or(0.0)
+                    // The total_pnl field already prioritizes USDC-based calculation over price-based
+                    data.get("total_pnl").and_then(|p| p.as_f64()).unwrap_or(0.0)
                 } else {
                     0.0
                 }
             } else {
-                // Fallback to old endpoint if new one doesn't exist
-                match client.get(&format!("{}/performance/metrics", database_url)).send().await {
-                    Ok(fallback_response) => {
-                        if let Ok(fallback_data) = fallback_response.json::<serde_json::Value>().await {
-                            if let Some(data) = fallback_data.get("data") {
-                                data.get("total_pnl").and_then(|p| p.as_f64()).unwrap_or(0.0)
-                            } else {
-                                0.0
-                            }
-                        } else {
-                            0.0
-                        }
-                    }
-                    Err(_) => 0.0,
-                }
+                0.0
             }
         }
         Err(_) => 0.0,

@@ -853,13 +853,20 @@ impl Database {
             }
         };
 
+        // Log USDC tracking
+        if let Some(usdc_amount) = request.usdc_spent {
+            info!("💰 Creating position with USDC spent: ${:.2}", usdc_amount);
+        } else {
+            info!("⚠️ Creating position without USDC tracking");
+        }
+
         sqlx::query(
             r#"
             INSERT INTO positions (
                 id, wallet_id, pair, position_type, entry_price, entry_time,
-                quantity, status, created_at, updated_at
+                quantity, status, usdc_spent, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
@@ -870,6 +877,7 @@ impl Database {
         .bind(&now)
         .bind(request.quantity)
         .bind("open")
+        .bind(request.usdc_spent)
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
@@ -893,6 +901,58 @@ impl Database {
             updated_at: now,
             current_price: Some(request.entry_price),
         })
+    }
+
+    // USDC-based position creation for accurate PnL tracking
+    pub async fn create_position_with_usdc(
+        &self,
+        wallet_address: &str,
+        pair: &str,
+        position_type: &str,
+        entry_price: f64,
+        quantity: f64,
+        usdc_spent: Option<f64>,
+    ) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+
+        // Get wallet by address, create if it doesn't exist
+        let wallet = match self.get_wallet_by_address(wallet_address).await? {
+            Some(wallet) => wallet,
+            None => {
+                info!("Creating new wallet for address: {}", wallet_address);
+                self.create_wallet(wallet_address).await?
+            }
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO positions (
+                id, wallet_id, pair, position_type, entry_price, entry_time,
+                quantity, status, usdc_spent, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&id)
+        .bind(&wallet.id)
+        .bind(pair)
+        .bind(position_type)
+        .bind(entry_price)
+        .bind(&now)
+        .bind(quantity)
+        .bind("open")
+        .bind(usdc_spent)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        if let Some(usdc_amount) = usdc_spent {
+            info!("💰 Position created with USDC tracking: ${:.2} spent", usdc_amount.abs());
+        }
+
+        Ok(id)
     }
 
     pub async fn close_position(&self, request: &crate::models::ClosePositionRequest) -> Result<crate::models::Position> {
@@ -970,12 +1030,19 @@ impl Database {
 
         info!("💰 PnL: ${:.2} ({:.2}%) | Duration: {}s", pnl, pnl_percent, duration_seconds);
 
-        // Update position status
+        // Log USDC tracking
+        if let Some(usdc_amount) = request.usdc_received {
+            info!("💰 Closing position with USDC received: ${:.2}", usdc_amount);
+        } else {
+            info!("⚠️ Closing position without USDC tracking");
+        }
+
+        // Update position status with USDC received
         match sqlx::query(
             r#"
             UPDATE positions
             SET status = 'closed', exit_price = ?, exit_time = ?, pnl = ?, pnl_percent = ?,
-                duration_seconds = ?, updated_at = ?
+                duration_seconds = ?, usdc_received = ?, updated_at = ?
             WHERE id = ?
             "#,
         )
@@ -984,6 +1051,7 @@ impl Database {
         .bind(pnl)
         .bind(pnl_percent)
         .bind(duration_seconds)
+        .bind(request.usdc_received)
         .bind(&now)
         .bind(&request.position_id)
         .execute(&self.pool)
@@ -1060,6 +1128,106 @@ impl Database {
             updated_at: updated_position.try_get("updated_at")?,
             current_price: Some(updated_position.try_get("exit_price").unwrap_or_else(|_| updated_position.try_get("entry_price").unwrap_or(0.0))),
         })
+    }
+
+    // USDC-based position closure for accurate PnL tracking
+    pub async fn close_position_with_usdc(
+        &self,
+        position_id: &str,
+        exit_price: f64,
+        usdc_received: Option<f64>,
+    ) -> Result<()> {
+        let now = Utc::now();
+        
+        info!("🔍 Closing position with USDC tracking: {}", position_id);
+
+        // Get the position to calculate duration and PnL
+        let position = match sqlx::query(
+            r#"
+            SELECT * FROM positions WHERE id = ?
+            "#,
+        )
+        .bind(position_id)
+        .fetch_one(&self.pool)
+        .await {
+            Ok(pos) => pos,
+            Err(sqlx::Error::RowNotFound) => {
+                error!("❌ Position not found: {}", position_id);
+                return Err(DatabaseServiceError::NotFound(format!("Position {} not found", position_id)));
+            }
+            Err(e) => {
+                error!("❌ Database error looking up position {}: {}", position_id, e);
+                return Err(DatabaseServiceError::Database(e));
+            }
+        };
+
+        let entry_time: DateTime<Utc> = position.try_get("entry_time")?;
+        let entry_price: f64 = position.try_get("entry_price")?;
+        let quantity: f64 = position.try_get("quantity")?;
+        let position_type: String = position.try_get("position_type")?;
+        let usdc_spent: Option<f64> = position.try_get("usdc_spent").ok();
+
+        // Calculate duration
+        let duration_seconds = (now - entry_time).num_seconds();
+
+        // Calculate price-based PnL (fallback)
+        let price_based_pnl = if position_type == "long" {
+            (exit_price - entry_price) * quantity
+        } else {
+            (entry_price - exit_price) * quantity
+        };
+
+        let price_based_pnl_percent = if position_type == "long" {
+            ((exit_price - entry_price) / entry_price) * 100.0
+        } else {
+            ((entry_price - exit_price) / entry_price) * 100.0
+        };
+
+        // Use USDC-based PnL if available, otherwise fallback to price-based
+        let (final_pnl, final_pnl_percent) = if let (Some(received), Some(spent)) = (usdc_received, usdc_spent) {
+            let usdc_pnl = received - spent.abs();
+            let usdc_pnl_percent = (usdc_pnl / spent.abs()) * 100.0;
+            info!("💰 Using USDC-based PnL: ${:.2} ({:.2}%) vs price-based: ${:.2} ({:.2}%)", 
+                  usdc_pnl, usdc_pnl_percent, price_based_pnl, price_based_pnl_percent);
+            (usdc_pnl, usdc_pnl_percent)
+        } else {
+            info!("⚠️ Using price-based PnL fallback: ${:.2} ({:.2}%)", price_based_pnl, price_based_pnl_percent);
+            (price_based_pnl, price_based_pnl_percent)
+        };
+
+        // Update position with USDC tracking
+        match sqlx::query(
+            r#"
+            UPDATE positions
+            SET status = 'closed', exit_price = ?, exit_time = ?, pnl = ?, pnl_percent = ?,
+                duration_seconds = ?, usdc_received = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(exit_price)
+        .bind(&now)
+        .bind(final_pnl)
+        .bind(final_pnl_percent)
+        .bind(duration_seconds)
+        .bind(usdc_received)
+        .bind(&now)
+        .bind(position_id)
+        .execute(&self.pool)
+        .await {
+            Ok(_) => {
+                if let Some(usdc_amount) = usdc_received {
+                    info!("✅ Position closed with USDC tracking: ${:.2} received", usdc_amount);
+                } else {
+                    info!("✅ Position closed with price-based PnL");
+                }
+            }
+            Err(e) => {
+                error!("❌ Failed to close position with USDC tracking: {}", e);
+                return Err(DatabaseServiceError::Database(e));
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn get_open_positions(&self, wallet_address: &str) -> Result<Vec<crate::models::Position>> {
@@ -1601,9 +1769,13 @@ impl Database {
         let total_closed_trades: i64 = total_pnl_row.try_get("total_trades").unwrap_or(0);
         
         if usdc_based_trades > 0 {
-            info!("💰 P&L Calculation: Using USDC-based data for {}/{} trades", usdc_based_trades, total_closed_trades);
+            info!("💰 DASHBOARD P&L: Using REAL USDC balance changes for {}/{} trades (Total: ${:.2})", usdc_based_trades, total_closed_trades, total_pnl);
+            info!("✅ USDC TRACKING WORKING: Dashboard will show actual wallet balance changes");
         } else if total_closed_trades > 0 {
-            warn!("⚠️ P&L Calculation: Using price-based fallback for all {} trades (no USDC data)", total_closed_trades);
+            warn!("⚠️ DASHBOARD P&L: Using price-based fallback for all {} trades (no USDC data available)", total_closed_trades);
+            warn!("❌ USDC TRACKING NOT WORKING: Check if USDC data is being stored properly");
+        } else {
+            info!("📊 No closed trades yet - waiting for first trade to test USDC tracking");
         }
 
         // Get total PnL percent

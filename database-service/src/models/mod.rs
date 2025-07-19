@@ -243,6 +243,7 @@ pub struct CreatePositionRequest {
     pub position_type: String,
     pub entry_price: f64,
     pub quantity: f64,
+    pub usdc_spent: Option<f64>, // Actual USDC spent including fees
 }
 
 #[derive(Debug, Deserialize)]
@@ -251,6 +252,7 @@ pub struct ClosePositionRequest {
     pub exit_price: f64,
     pub transaction_hash: Option<String>,
     pub fees: Option<f64>,
+    pub usdc_received: Option<f64>, // Actual USDC received after fees
 }
 
 #[derive(Debug, Deserialize)]

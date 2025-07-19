@@ -133,7 +133,9 @@ impl DatabaseService {
         // Add USDC spent if provided (actual USDC flow from transaction)
         if let Some(usdc_amount) = usdc_spent {
             create_position_request["usdc_spent"] = serde_json::Value::from(usdc_amount.abs());
-            info!("💰 Recording actual USDC spent: ${:.2}", usdc_amount.abs());
+            info!("💰 TRADING LOGIC → DATABASE: Recording actual USDC spent: ${:.2}", usdc_amount.abs());
+        } else {
+            warn!("⚠️ TRADING LOGIC → DATABASE: No USDC spent data provided - will use price-based fallback");
         }
 
         let url = format!("{}/positions", self.base_url);
@@ -190,7 +192,9 @@ impl DatabaseService {
         // Add USDC received if provided (actual USDC flow from transaction)
         if let Some(usdc_amount) = usdc_received {
             close_request["usdc_received"] = serde_json::Value::from(usdc_amount.abs());
-            info!("💰 Recording actual USDC received: ${:.2}", usdc_amount.abs());
+            info!("💰 TRADING LOGIC → DATABASE: Recording actual USDC received: ${:.2}", usdc_amount.abs());
+        } else {
+            warn!("⚠️ TRADING LOGIC → DATABASE: No USDC received data provided - will use price-based fallback");
         }
 
         let close_url = format!("{}/positions/close", self.base_url);
