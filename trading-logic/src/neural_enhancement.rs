@@ -931,56 +931,79 @@ impl NeuralEnhancement {
                     match std::thread::spawn(move || {
                         let rt = tokio::runtime::Runtime::new().unwrap();
                         rt.block_on(async {
-                            response.json::<NeuralState>().await
+                            response.json::<serde_json::Value>().await
                         })
                     }).join() {
-                        Ok(Ok(neural_state)) => {
-                            // Restore neural network state
-                            self.learner.momentum_weight = neural_state.momentum_weight;
-                            self.learner.rsi_weight = neural_state.rsi_weight;
-                            self.learner.volatility_weight = neural_state.volatility_weight;
-                            self.learner.pattern_weights = neural_state.pattern_weights;
-                            self.learner.hidden_state = neural_state.hidden_state;
-                            self.learner.total_predictions = neural_state.total_predictions;
-                            self.learner.correct_predictions = neural_state.correct_predictions;
-                            self.learner.learning_rate = neural_state.learning_rate;
-                            
-                            let accuracy = if neural_state.total_predictions > 0 {
-                                neural_state.correct_predictions as f64 / neural_state.total_predictions as f64
+                        Ok(Ok(api_response)) => {
+                            // Parse the API response wrapper
+                            if let Some(data) = api_response.get("data") {
+                                // Check if data is null (no neural state exists yet)
+                                if data.is_null() {
+                                    info!("🧠 No existing neural state found - starting fresh");
+                                    return Ok(());
+                                }
+                                
+                                // Try to deserialize the neural state from the data field
+                                match serde_json::from_value::<NeuralState>(data.clone()) {
+                                    Ok(neural_state) => {
+                                        // Restore neural network state
+                                        self.learner.momentum_weight = neural_state.momentum_weight;
+                                        self.learner.rsi_weight = neural_state.rsi_weight;
+                                        self.learner.volatility_weight = neural_state.volatility_weight;
+                                        self.learner.pattern_weights = neural_state.pattern_weights;
+                                        self.learner.hidden_state = neural_state.hidden_state;
+                                        self.learner.total_predictions = neural_state.total_predictions;
+                                        self.learner.correct_predictions = neural_state.correct_predictions;
+                                        self.learner.learning_rate = neural_state.learning_rate;
+                                        
+                                        let accuracy = if neural_state.total_predictions > 0 {
+                                            neural_state.correct_predictions as f64 / neural_state.total_predictions as f64
+                                        } else {
+                                            0.5
+                                        };
+                                        
+                                        info!("💾 Neural state loaded successfully!");
+                                        info!("🧠 Restored: {} predictions, {:.1}% accuracy, last updated: {}", 
+                                              neural_state.total_predictions,
+                                              accuracy * 100.0,
+                                              neural_state.last_updated.format("%Y-%m-%d %H:%M:%S"));
+                                        info!("⚖️ Weights: Momentum={:.3}, RSI={:.3}, Volatility={:.3}",
+                                              neural_state.momentum_weight,
+                                              neural_state.rsi_weight, 
+                                              neural_state.volatility_weight);
+                                    }
+                                    Err(parse_error) => {
+                                        warn!("⚠️ Failed to parse neural state from database: {}", parse_error);
+                                        debug!("🔍 Raw API response data: {}", serde_json::to_string_pretty(data).unwrap_or_else(|_| "Invalid JSON".to_string()));
+                                        info!("🧠 Starting with fresh neural network due to parsing error");
+                                    }
+                                }
                             } else {
-                                0.5
-                            };
-                            
-                            info!("💾 Neural state loaded successfully!");
-                            info!("🧠 Restored: {} predictions, {:.1}% accuracy, last updated: {}", 
-                                  neural_state.total_predictions,
-                                  accuracy * 100.0,
-                                  neural_state.last_updated.format("%Y-%m-%d %H:%M:%S"));
-                            info!("⚖️ Weights: Momentum={:.3}, RSI={:.3}, Volatility={:.3}",
-                                  neural_state.momentum_weight,
-                                  neural_state.rsi_weight, 
-                                  neural_state.volatility_weight);
-                            
-                            Ok(())
+                                warn!("⚠️ API response missing data field");
+                                info!("🧠 Starting with fresh neural network");
+                            }
                         }
-                        _ => {
-                            warn!("⚠️ Failed to parse neural state from database");
-                            Ok(())
+                        Ok(Err(json_error)) => {
+                            warn!("⚠️ Failed to parse API response as JSON: {}", json_error);
+                            info!("🧠 Starting with fresh neural network");
+                        }
+                        Err(_) => {
+                            warn!("⚠️ Failed to parse neural state from database - thread panic");
+                            info!("🧠 Starting with fresh neural network");
                         }
                     }
                 } else if response.status().as_u16() == 404 {
                     info!("🧠 No existing neural state found - starting fresh");
-                    Ok(())
                 } else {
                     warn!("⚠️ Failed to load neural state: HTTP {}", response.status());
-                    Ok(())
                 }
             }
             _ => {
                 warn!("⚠️ Could not connect to database for neural state loading");
-                Ok(())
             }
         }
+        
+        Ok(())
     }
     
     // Save neural network state to database

@@ -5,11 +5,56 @@ use crate::database_service::DatabaseService;
 use crate::ml_strategy::{MLStrategy, TradeResult};
 use anyhow::Result;
 use chrono::Utc;
-use tracing::{info, warn, error};
+use tracing::{info, warn, error, debug};
+
+#[derive(Debug, Clone)]
+pub enum OverrideLevel {
+    None,           // Full neural control
+    Loose,          // Wide safety net
+    Moderate,       // Medium safety net  
+    Strict,         // Tight safety net
+}
+
+#[derive(Debug, Clone)]
+pub struct DynamicConfidenceConfig {
+    pub high_confidence_threshold: f64,    // 70%+ confidence
+    pub moderate_confidence_threshold: f64, // 40-70% confidence
+    pub high_accuracy_threshold: f64,      // 60%+ recent accuracy
+    pub moderate_accuracy_threshold: f64,  // 40-60% recent accuracy
+    pub min_predictions_for_accuracy: u64, // Minimum predictions before trusting accuracy
+}
+
+impl Default for DynamicConfidenceConfig {
+    fn default() -> Self {
+        Self {
+            high_confidence_threshold: std::env::var("DYNAMIC_HIGH_CONFIDENCE_THRESHOLD")
+                .unwrap_or_else(|_| "0.70".to_string())
+                .parse::<f64>()
+                .unwrap_or(0.70),
+            moderate_confidence_threshold: std::env::var("DYNAMIC_MODERATE_CONFIDENCE_THRESHOLD")
+                .unwrap_or_else(|_| "0.40".to_string())
+                .parse::<f64>()
+                .unwrap_or(0.40),
+            high_accuracy_threshold: std::env::var("DYNAMIC_HIGH_ACCURACY_THRESHOLD")
+                .unwrap_or_else(|_| "0.60".to_string())
+                .parse::<f64>()
+                .unwrap_or(0.60),
+            moderate_accuracy_threshold: std::env::var("DYNAMIC_MODERATE_ACCURACY_THRESHOLD")
+                .unwrap_or_else(|_| "0.40".to_string())
+                .parse::<f64>()
+                .unwrap_or(0.40),
+            min_predictions_for_accuracy: std::env::var("DYNAMIC_MIN_PREDICTIONS")
+                .unwrap_or_else(|_| "20".to_string())
+                .parse::<u64>()
+                .unwrap_or(20),
+        }
+    }
+}
 
 pub struct SignalProcessor {
     trading_pair: String,
     last_buy_wallet_index: Option<usize>, // Track rotation for buy signals
+    dynamic_config: DynamicConfidenceConfig, // Dynamic confidence configuration
 }
 
 impl SignalProcessor {
@@ -17,6 +62,86 @@ impl SignalProcessor {
         Self { 
             trading_pair,
             last_buy_wallet_index: None,
+            dynamic_config: DynamicConfidenceConfig::default(),
+        }
+    }
+
+    /// Determine override level based on neural network confidence and performance
+    fn determine_override_level(&self, ml_strategy: &MLStrategy) -> OverrideLevel {
+        let ml_stats = ml_strategy.get_ml_stats();
+        
+        // Get neural network performance metrics
+        let total_predictions = ml_stats.total_trades as u64; // Using ML trades as proxy for predictions
+        let recent_accuracy = ml_stats.win_rate;
+        
+        // For very new systems, be conservative
+        if total_predictions < self.dynamic_config.min_predictions_for_accuracy {
+            debug!("🛡️ Dynamic Confidence: New system ({} predictions) - Using STRICT overrides", total_predictions);
+            return OverrideLevel::Strict;
+        }
+        
+        // Determine confidence and accuracy levels
+        let high_accuracy = recent_accuracy >= self.dynamic_config.high_accuracy_threshold;
+        let moderate_accuracy = recent_accuracy >= self.dynamic_config.moderate_accuracy_threshold;
+        
+        // For now, we'll use ML performance as a proxy for neural confidence
+        // In a future enhancement, we could get actual neural confidence from the neural system
+        let neural_confidence = if recent_accuracy > 0.7 { 0.8 } else if recent_accuracy > 0.5 { 0.6 } else { 0.3 };
+        
+        let high_confidence = neural_confidence >= self.dynamic_config.high_confidence_threshold;
+        let moderate_confidence = neural_confidence >= self.dynamic_config.moderate_confidence_threshold;
+        
+        // Determine override level based on confidence and accuracy matrix
+        let override_level = match (high_confidence, high_accuracy) {
+            (true, true) => {
+                info!("🧠 Dynamic Confidence: HIGH confidence ({:.1}%) + HIGH accuracy ({:.1}%) = NO OVERRIDES", 
+                      neural_confidence * 100.0, recent_accuracy * 100.0);
+                OverrideLevel::None
+            },
+            (true, false) if moderate_accuracy => {
+                info!("🧠 Dynamic Confidence: HIGH confidence ({:.1}%) + MODERATE accuracy ({:.1}%) = LOOSE overrides", 
+                      neural_confidence * 100.0, recent_accuracy * 100.0);
+                OverrideLevel::Loose
+            },
+            (false, true) if moderate_confidence => {
+                info!("🧠 Dynamic Confidence: MODERATE confidence ({:.1}%) + HIGH accuracy ({:.1}%) = LOOSE overrides", 
+                      neural_confidence * 100.0, recent_accuracy * 100.0);
+                OverrideLevel::Loose
+            },
+            (false, false) if moderate_confidence && moderate_accuracy => {
+                info!("🧠 Dynamic Confidence: MODERATE confidence ({:.1}%) + MODERATE accuracy ({:.1}%) = MODERATE overrides", 
+                      neural_confidence * 100.0, recent_accuracy * 100.0);
+                OverrideLevel::Moderate
+            },
+            _ => {
+                info!("🧠 Dynamic Confidence: LOW confidence ({:.1}%) or LOW accuracy ({:.1}%) = STRICT overrides", 
+                      neural_confidence * 100.0, recent_accuracy * 100.0);
+                OverrideLevel::Strict
+            }
+        };
+        
+        override_level
+    }
+
+    /// Get override thresholds based on override level
+    fn get_override_thresholds(&self, override_level: &OverrideLevel) -> Option<(f64, f64)> {
+        match override_level {
+            OverrideLevel::None => {
+                info!("🚀 Neural Network: FULL CONTROL - No overrides applied");
+                None // No overrides - full neural control
+            },
+            OverrideLevel::Loose => {
+                info!("🛡️ Safety Net: LOOSE overrides - Stop: -15%, Take Profit: +25%");
+                Some((-0.15, 0.25)) // -15% stop loss, +25% take profit
+            },
+            OverrideLevel::Moderate => {
+                info!("🛡️ Safety Net: MODERATE overrides - Stop: -10%, Take Profit: +18%");
+                Some((-0.10, 0.18)) // -10% stop loss, +18% take profit
+            },
+            OverrideLevel::Strict => {
+                info!("🛡️ Safety Net: STRICT overrides - Stop: -6%, Take Profit: +12%");
+                Some((-0.06, 0.12)) // -6% stop loss, +12% take profit
+            }
         }
     }
 
@@ -294,6 +419,9 @@ impl SignalProcessor {
         ml_strategy: &mut MLStrategy,
         strategy: &crate::strategy::TradingStrategy,
     ) -> Result<()> {
+        // 🧠 DYNAMIC CONFIDENCE SYSTEM: Determine override level based on neural performance
+        let override_level = self.determine_override_level(ml_strategy);
+        let override_thresholds = self.get_override_thresholds(&override_level);
         let current_price = prices.last().map(|p| p.price).unwrap_or(0.0);
         
         // Debug price data ordering
@@ -321,36 +449,67 @@ impl SignalProcessor {
                 info!("📊 {} POSITION CHECK: Entry ${:.4} → Current ${:.4} = {:.2}% PnL", 
                       executor.get_wallet_name(), position.entry_price, current_price, pnl * 100.0);
                 
-                // Detailed condition checking with individual logging
-                let rsi_overbought_condition = rsi > 70.0 && pnl > 0.014;  // 1.4% for RSI overbought
-                let momentum_decay_condition = momentum_decay && pnl > 0.014;  // 1.4% for momentum decay
-                let take_profit_condition = pnl > 0.02;  // 2.0% for pure take profit
-                let stop_loss_condition = pnl < -0.012;  // -1.2% for stop loss
-                
-                info!("🎯 EXIT CONDITION ANALYSIS for {}:", executor.get_wallet_name());
-                info!("   RSI Overbought Exit: RSI={:.1} > 70.0 && PnL={:.2}% > 1.4% = {}", 
-                      rsi, pnl * 100.0, rsi_overbought_condition);
-                info!("   Momentum Decay Exit: Decay={} && PnL={:.2}% > 1.4% = {}", 
-                      momentum_decay, pnl * 100.0, momentum_decay_condition);
-                info!("   Take Profit Exit: PnL={:.2}% > 2.0% = {}", 
-                      pnl * 100.0, take_profit_condition);
-                info!("   Stop Loss Exit: PnL={:.2}% < -1.2% = {}", 
-                      pnl * 100.0, stop_loss_condition);
-                
-                // Smart exit strategy: Technical protection + profit targets
-                let should_exit = rsi_overbought_condition || momentum_decay_condition || take_profit_condition || stop_loss_condition;
+                // 🧠 DYNAMIC CONFIDENCE SYSTEM: Apply exit conditions based on override level
+                let should_exit = match override_thresholds {
+                    None => {
+                        // NO OVERRIDES: Full neural control - only technical indicators
+                        let rsi_overbought_condition = rsi > 75.0 && pnl > 0.005;  // Looser RSI condition
+                        let momentum_decay_condition = momentum_decay && pnl > 0.005;  // Looser momentum condition
+                        
+                        info!("🧠 {} NEURAL CONTROL: RSI={:.1} > 75.0 && PnL={:.2}% > 0.5% = {}", 
+                              executor.get_wallet_name(), rsi, pnl * 100.0, rsi_overbought_condition);
+                        info!("🧠 {} NEURAL CONTROL: Momentum Decay={} && PnL={:.2}% > 0.5% = {}", 
+                              executor.get_wallet_name(), momentum_decay, pnl * 100.0, momentum_decay_condition);
+                        
+                        rsi_overbought_condition || momentum_decay_condition
+                    },
+                    Some((stop_loss_threshold, take_profit_threshold)) => {
+                        // OVERRIDES ACTIVE: Apply dynamic thresholds
+                        let rsi_overbought_condition = rsi > 70.0 && pnl > 0.014;  // Standard RSI condition
+                        let momentum_decay_condition = momentum_decay && pnl > 0.014;  // Standard momentum condition
+                        let take_profit_condition = pnl > take_profit_threshold;
+                        let stop_loss_condition = pnl < stop_loss_threshold;
+                        
+                        info!("🛡️ {} OVERRIDE ANALYSIS:", executor.get_wallet_name());
+                        info!("   RSI Overbought: RSI={:.1} > 70.0 && PnL={:.2}% > 1.4% = {}", 
+                              rsi, pnl * 100.0, rsi_overbought_condition);
+                        info!("   Momentum Decay: Decay={} && PnL={:.2}% > 1.4% = {}", 
+                              momentum_decay, pnl * 100.0, momentum_decay_condition);
+                        info!("   Take Profit: PnL={:.2}% > {:.1}% = {}", 
+                              pnl * 100.0, take_profit_threshold * 100.0, take_profit_condition);
+                        info!("   Stop Loss: PnL={:.2}% < {:.1}% = {}", 
+                              pnl * 100.0, stop_loss_threshold * 100.0, stop_loss_condition);
+                        
+                        rsi_overbought_condition || momentum_decay_condition || take_profit_condition || stop_loss_condition
+                    }
+                };
                 
                 if should_exit {
-                    let exit_reason = if stop_loss_condition {
-                        "STOP LOSS (-1.2%)"
-                    } else if take_profit_condition {
-                        "TAKE PROFIT (+2.0%)"
-                    } else if rsi_overbought_condition {
-                        "RSI OVERBOUGHT (+1.4%)"
-                    } else if momentum_decay_condition {
-                        "MOMENTUM DECAY (+1.4%)"
-                    } else {
-                        "UNKNOWN"
+                    let exit_reason = match override_thresholds {
+                        None => {
+                            // Neural control - determine reason
+                            if rsi > 75.0 && pnl > 0.005 {
+                                "NEURAL: RSI OVERBOUGHT".to_string()
+                            } else if momentum_decay && pnl > 0.005 {
+                                "NEURAL: MOMENTUM DECAY".to_string()
+                            } else {
+                                "NEURAL: TECHNICAL EXIT".to_string()
+                            }
+                        },
+                        Some((stop_loss_threshold, take_profit_threshold)) => {
+                            // Override control - determine reason
+                            if pnl < stop_loss_threshold {
+                                format!("STOP LOSS ({:.1}%)", stop_loss_threshold * 100.0)
+                            } else if pnl > take_profit_threshold {
+                                format!("TAKE PROFIT (+{:.1}%)", take_profit_threshold * 100.0)
+                            } else if rsi > 70.0 && pnl > 0.014 {
+                                "RSI OVERBOUGHT (+1.4%)".to_string()
+                            } else if momentum_decay && pnl > 0.014 {
+                                "MOMENTUM DECAY (+1.4%)".to_string()
+                            } else {
+                                "TECHNICAL EXIT".to_string()
+                            }
+                        }
                     };
                     
                     info!("🚪 {} EXIT CONDITION TRIGGERED: {} | PnL {:.2}%", 
