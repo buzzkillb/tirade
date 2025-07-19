@@ -123,6 +123,8 @@ impl Database {
                 pnl REAL,
                 pnl_percent REAL,
                 duration_seconds INTEGER,
+                usdc_spent REAL,
+                usdc_received REAL,
                 created_at DATETIME NOT NULL,
                 updated_at DATETIME NOT NULL,
                 FOREIGN KEY (wallet_id) REFERENCES wallets (id)
@@ -131,6 +133,15 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
+
+        // Add USDC tracking columns to existing positions table (migration)
+        let _ = sqlx::query("ALTER TABLE positions ADD COLUMN usdc_spent REAL")
+            .execute(&self.pool)
+            .await; // Ignore error if column already exists
+        
+        let _ = sqlx::query("ALTER TABLE positions ADD COLUMN usdc_received REAL")
+            .execute(&self.pool)
+            .await; // Ignore error if column already exists
 
         // Create trades table (detailed trade history)
         sqlx::query(
@@ -1568,16 +1579,32 @@ impl Database {
             0.0
         };
 
-        // Get total PnL
+        // Get total PnL - prioritize USDC-based calculation
         let total_pnl_row = sqlx::query(
             r#"
-            SELECT COALESCE(SUM(pnl), 0.0) as total_pnl FROM positions 
+            SELECT 
+                COALESCE(SUM(CASE 
+                    WHEN usdc_received IS NOT NULL AND usdc_spent IS NOT NULL 
+                    THEN usdc_received - ABS(usdc_spent)
+                    ELSE pnl 
+                END), 0.0) as total_pnl,
+                COUNT(CASE WHEN usdc_received IS NOT NULL AND usdc_spent IS NOT NULL THEN 1 END) as usdc_based_trades,
+                COUNT(*) as total_trades
+            FROM positions 
             WHERE status = 'closed'
             "#,
         )
         .fetch_one(&self.pool)
         .await?;
         let total_pnl: f64 = total_pnl_row.try_get("total_pnl")?;
+        let usdc_based_trades: i64 = total_pnl_row.try_get("usdc_based_trades").unwrap_or(0);
+        let total_closed_trades: i64 = total_pnl_row.try_get("total_trades").unwrap_or(0);
+        
+        if usdc_based_trades > 0 {
+            info!("💰 P&L Calculation: Using USDC-based data for {}/{} trades", usdc_based_trades, total_closed_trades);
+        } else if total_closed_trades > 0 {
+            warn!("⚠️ P&L Calculation: Using price-based fallback for all {} trades (no USDC data)", total_closed_trades);
+        }
 
         // Get total PnL percent
         let total_pnl_percent_row = sqlx::query(

@@ -1202,6 +1202,9 @@ impl TradingEngine {
                                 entry_time: position.entry_time,
                                 exit_time: signal.timestamp,
                                 success: pnl > 0.0,
+                                usdc_spent: None, // Legacy code - USDC tracking not available
+                                usdc_received: None,
+                                usdc_pnl: None,
                             };
                             self.ml_strategy.record_trade(trade_result);
 
@@ -1292,6 +1295,9 @@ impl TradingEngine {
                             entry_time: pos.entry_time,
                             exit_time: Utc::now(),
                             success: pnl > 0.0,
+                            usdc_spent: None, // Legacy code - USDC tracking not available
+                            usdc_received: None,
+                            usdc_pnl: None,
                         };
                         self.ml_strategy.record_trade(trade_result);
                         

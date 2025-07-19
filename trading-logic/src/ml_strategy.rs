@@ -56,11 +56,15 @@ pub struct MLStrategy {
 pub struct TradeResult {
     pub entry_price: f64,
     pub exit_price: f64,
-    pub pnl: f64,
+    pub pnl: f64, // Percentage-based P&L for compatibility
     pub duration_seconds: i64,
     pub entry_time: DateTime<Utc>,
     pub exit_time: DateTime<Utc>,
     pub success: bool,
+    // USDC-based tracking for accurate P&L
+    pub usdc_spent: Option<f64>,
+    pub usdc_received: Option<f64>,
+    pub usdc_pnl: Option<f64>, // Actual USDC profit/loss
 }
 
 impl MLStrategy {
@@ -450,13 +454,38 @@ impl MLStrategy {
             self.recent_trades.pop_front();
         }
         
-        // 🧠 Neural Network Learning from trade result
+        // 🧠 Neural Network Learning from trade result - prioritize USDC-based P&L
         if let Some(ref mut neural_system) = self.neural_system {
+            // Use USDC-based P&L if available, otherwise fall back to percentage-based
+            let actual_pnl = if let Some(usdc_pnl) = trade_result.usdc_pnl {
+                // Convert USDC P&L to percentage for neural network compatibility
+                if let Some(usdc_spent) = trade_result.usdc_spent {
+                    usdc_pnl / usdc_spent.abs()
+                } else {
+                    trade_result.pnl // Fallback to percentage-based
+                }
+            } else {
+                trade_result.pnl
+            };
+            
+            let actual_success = if let Some(usdc_pnl) = trade_result.usdc_pnl {
+                usdc_pnl > 0.0 // USDC-based success determination
+            } else {
+                trade_result.success
+            };
+            
+            if trade_result.usdc_pnl.is_some() {
+                info!("🧠 Neural Learning: Using USDC-based P&L: ${:.2} ({:.2}%)", 
+                      trade_result.usdc_pnl.unwrap(), actual_pnl * 100.0);
+            } else {
+                info!("🧠 Neural Learning: Using percentage-based P&L: {:.2}%", actual_pnl * 100.0);
+            }
+            
             let trade_outcome = TradeOutcome {
                 entry_price: trade_result.entry_price,
                 exit_price: trade_result.exit_price,
-                pnl: trade_result.pnl,
-                success: trade_result.success,
+                pnl: actual_pnl,
+                success: actual_success,
                 timestamp: trade_result.exit_time,
             };
             
@@ -591,6 +620,9 @@ impl MLStrategy {
             entry_time,
             exit_time,
             success,
+            usdc_spent: trade_data.get("usdc_spent").and_then(|v| v.as_f64()),
+            usdc_received: trade_data.get("usdc_received").and_then(|v| v.as_f64()),
+            usdc_pnl: trade_data.get("usdc_pnl").and_then(|v| v.as_f64()),
         })
     }
 

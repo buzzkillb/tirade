@@ -320,6 +320,12 @@ impl SignalProcessor {
                         };
 
                         // Record trade result for ML with actual USDC-based PnL
+                        let usdc_pnl_amount = if let (Some(received), Some(spent)) = (usdc_received, position.usdc_spent) {
+                            Some(received - spent.abs())
+                        } else {
+                            None
+                        };
+                        
                         let trade_result = TradeResult {
                             entry_price: position.entry_price,
                             exit_price,
@@ -328,6 +334,9 @@ impl SignalProcessor {
                             entry_time: position.entry_time,
                             exit_time: signal.timestamp,
                             success,
+                            usdc_spent: position.usdc_spent,
+                            usdc_received,
+                            usdc_pnl: usdc_pnl_amount,
                         };
                         ml_strategy.record_trade(trade_result).await;
 
@@ -505,6 +514,9 @@ impl SignalProcessor {
                                 entry_time: position.entry_time,
                                 exit_time: Utc::now(),
                                 success: actual_pnl > 0.0,
+                                usdc_spent: position.usdc_spent,
+                                usdc_received: None, // Not available in this context
+                                usdc_pnl: None, // Not available in this context
                             };
                             
                             // Record trade for ML and neural learning
