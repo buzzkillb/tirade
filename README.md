@@ -5,10 +5,10 @@
 ## 🧠 Core Features
 
 ### 🎯 **Intelligent Trading Engine**
-- **Multi-wallet support** with round-robin position management
-- **Smart exit strategy**: 0.8% technical exits + 1.2% profit targets
+- **Multi-wallet support** with AI-driven position management
+- **Neural exit strategy**: Dynamic AI-powered exit conditions with no fixed thresholds
 - **Single position per wallet** with 90% capital utilization
-- **Real-time technical analysis** (RSI, SMA, momentum, volatility)
+- **Real-time technical analysis** enhanced by neural pattern recognition
 - **Jupiter DEX integration** for optimal swap execution
 
 ### 🤖 **Machine Learning Integration**
@@ -116,24 +116,37 @@ http://localhost:8080
 
 ## 🎯 Trading Strategy
 
-### **Smart Exit Conditions**
-The bot uses a sophisticated multi-tier exit strategy:
+### **🧠 Full Neural Network Control**
+TIRADE now operates under **complete AI control** with all safety net overrides disabled:
 
-1. **Technical Protection (0.8% threshold)**
-   - Exit early when RSI > 70 (overbought) + 0.8% profit
-   - Exit when momentum decay detected + 0.8% profit
+- **🚀 Pure Neural Decision Making**: All buy/sell decisions made by neural networks and ML algorithms
+- **🎯 Dynamic Exit Strategy**: AI-powered exit conditions based on learned patterns, not fixed thresholds
+- **🧬 Adaptive Risk Management**: Neural networks assess risk in real-time using market context
+- **📊 Intelligent Signal Processing**: ML models filter and enhance trading signals continuously
 
-2. **Profit Target (1.2%)**
-   - Take solid gains when no technical issues present
+### **🤖 AI-Powered Exit Conditions**
+The neural system evaluates multiple factors simultaneously:
 
-3. **Risk Management (1% stop loss)**
-   - Tight risk control to preserve capital
+1. **Neural Pattern Recognition**
+   - RSI overbought conditions with profit context analysis
+   - Momentum decay detection with market regime awareness
+   - Price action patterns learned from historical data
+
+2. **ML-Enhanced Decision Making**
+   - Market regime classification (trending, ranging, volatile)
+   - Confidence-weighted signal processing
+   - Real-time performance adaptation
+
+3. **Dynamic Risk Assessment**
+   - Context-aware position sizing
+   - Adaptive stop-loss based on volatility
+   - Neural confidence scoring for trade validation
 
 ### **Position Management**
 - **Single position per wallet** to prevent over-leveraging
 - **90% capital utilization** for maximum efficiency
-- **Database-driven position tracking** (not balance-based)
-- **Round-robin wallet rotation** for multi-wallet setups
+- **AI-driven position tracking** with neural enhancement
+- **Smart wallet rotation** based on performance metrics
 
 ## 🤖 Machine Learning Features
 
@@ -225,11 +238,12 @@ WALLET_KEYS=key1,key2,key3
 
 ## 🛡️ Security & Risk Management
 
-### **Risk Controls**
-- **1% stop loss** for tight risk management
+### **🧠 AI-Powered Risk Controls**
+- **Neural risk assessment** with dynamic stop-loss based on market volatility
 - **Single position limit** prevents over-exposure
-- **Confidence thresholds** filter low-quality signals
+- **ML confidence thresholds** filter low-quality signals adaptively
 - **Slippage protection** on all trades
+- **Real-time risk monitoring** through neural pattern analysis
 
 ### **Security Features**
 - Private keys stored in environment variables

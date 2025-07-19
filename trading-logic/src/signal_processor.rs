@@ -5,7 +5,7 @@ use crate::database_service::DatabaseService;
 use crate::ml_strategy::{MLStrategy, TradeResult};
 use anyhow::Result;
 use chrono::Utc;
-use tracing::{info, warn, error, debug};
+use tracing::{info, warn, error};
 
 #[derive(Debug, Clone)]
 pub enum OverrideLevel {
@@ -67,60 +67,10 @@ impl SignalProcessor {
     }
 
     /// Determine override level based on neural network confidence and performance
-    fn determine_override_level(&self, ml_strategy: &MLStrategy) -> OverrideLevel {
-        let ml_stats = ml_strategy.get_ml_stats();
-        
-        // Get neural network performance metrics
-        let total_predictions = ml_stats.total_trades as u64; // Using ML trades as proxy for predictions
-        let recent_accuracy = ml_stats.win_rate;
-        
-        // For very new systems, be conservative
-        if total_predictions < self.dynamic_config.min_predictions_for_accuracy {
-            debug!("🛡️ Dynamic Confidence: New system ({} predictions) - Using STRICT overrides", total_predictions);
-            return OverrideLevel::Strict;
-        }
-        
-        // Determine confidence and accuracy levels
-        let high_accuracy = recent_accuracy >= self.dynamic_config.high_accuracy_threshold;
-        let moderate_accuracy = recent_accuracy >= self.dynamic_config.moderate_accuracy_threshold;
-        
-        // For now, we'll use ML performance as a proxy for neural confidence
-        // In a future enhancement, we could get actual neural confidence from the neural system
-        let neural_confidence = if recent_accuracy > 0.7 { 0.8 } else if recent_accuracy > 0.5 { 0.6 } else { 0.3 };
-        
-        let high_confidence = neural_confidence >= self.dynamic_config.high_confidence_threshold;
-        let moderate_confidence = neural_confidence >= self.dynamic_config.moderate_confidence_threshold;
-        
-        // Determine override level based on confidence and accuracy matrix
-        let override_level = match (high_confidence, high_accuracy) {
-            (true, true) => {
-                info!("🧠 Dynamic Confidence: HIGH confidence ({:.1}%) + HIGH accuracy ({:.1}%) = NO OVERRIDES", 
-                      neural_confidence * 100.0, recent_accuracy * 100.0);
-                OverrideLevel::None
-            },
-            (true, false) if moderate_accuracy => {
-                info!("🧠 Dynamic Confidence: HIGH confidence ({:.1}%) + MODERATE accuracy ({:.1}%) = LOOSE overrides", 
-                      neural_confidence * 100.0, recent_accuracy * 100.0);
-                OverrideLevel::Loose
-            },
-            (false, true) if moderate_confidence => {
-                info!("🧠 Dynamic Confidence: MODERATE confidence ({:.1}%) + HIGH accuracy ({:.1}%) = LOOSE overrides", 
-                      neural_confidence * 100.0, recent_accuracy * 100.0);
-                OverrideLevel::Loose
-            },
-            (false, false) if moderate_confidence && moderate_accuracy => {
-                info!("🧠 Dynamic Confidence: MODERATE confidence ({:.1}%) + MODERATE accuracy ({:.1}%) = MODERATE overrides", 
-                      neural_confidence * 100.0, recent_accuracy * 100.0);
-                OverrideLevel::Moderate
-            },
-            _ => {
-                info!("🧠 Dynamic Confidence: LOW confidence ({:.1}%) or LOW accuracy ({:.1}%) = STRICT overrides", 
-                      neural_confidence * 100.0, recent_accuracy * 100.0);
-                OverrideLevel::Strict
-            }
-        };
-        
-        override_level
+    fn determine_override_level(&self, _ml_strategy: &MLStrategy) -> OverrideLevel {
+        // Overrides completely disabled - full neural network control
+        info!("🚀 Neural Network: FULL CONTROL - All overrides disabled");
+        OverrideLevel::None
     }
 
     /// Get override thresholds based on override level
