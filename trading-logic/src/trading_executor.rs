@@ -240,15 +240,20 @@ impl TradingExecutor {
     async fn execute_buy_signal(&self, _signal: &TradingSignal, balance: &WalletBalance) -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
         info!("🟢 Executing BUY signal...");
         
-        // Calculate position size based on USDC balance
-        let position_size_usdc = balance.usdc_balance * self.position_size_percentage;
+        // Get precise balance before trade for accurate P&L tracking
+        let balance_before = self.get_wallet_balance().await?;
+        info!("💰 Balance before BUY: ${:.2} USDC, {:.6} SOL", 
+              balance_before.usdc_balance, balance_before.sol_balance);
+        
+        // Calculate position size based on actual current USDC balance
+        let position_size_usdc = balance_before.usdc_balance * self.position_size_percentage;
         
         if position_size_usdc < 1.0 {
-            warn!("⚠️  Insufficient USDC balance for trade: ${:.2} USDC", balance.usdc_balance);
+            warn!("⚠️  Insufficient USDC balance for trade: ${:.2} USDC", balance_before.usdc_balance);
             return Ok((None, None, None));
         }
 
-        info!("💰 Using ${:.2} USDC for trade (${:.2} available)", position_size_usdc, balance.usdc_balance);
+        info!("💰 Using ${:.2} USDC for trade (${:.2} available)", position_size_usdc, balance_before.usdc_balance);
 
         let result = self.execute_transaction_command(
             position_size_usdc,
@@ -257,16 +262,26 @@ impl TradingExecutor {
         ).await?;
 
         if result.success {
+            // Get precise balance after trade for accurate P&L tracking
+            let balance_after = self.get_wallet_balance().await?;
+            info!("💰 Balance after BUY: ${:.2} USDC, {:.6} SOL", 
+                  balance_after.usdc_balance, balance_after.sol_balance);
+            
+            // Calculate ACTUAL wallet balance changes (this is the real P&L)
+            let actual_usdc_change = balance_after.usdc_balance - balance_before.usdc_balance;
+            let actual_sol_change = balance_after.sol_balance - balance_before.sol_balance;
+            
             info!("✅ BUY trade executed successfully!");
+            info!("📊 ACTUAL wallet balance changes: USDC: ${:.2}, SOL: {:.6}", 
+                  actual_usdc_change, actual_sol_change);
+            info!("💰 Real USDC P&L: Spent ${:.2} USDC (including all fees)", actual_usdc_change.abs());
+            
             if let Some(signature) = &result.signature {
                 info!("📊 Transaction signature: {}", signature);
             }
-            if let (Some(sol_change), Some(usdc_change)) = (result.sol_change, result.usdc_change) {
-                info!("💱 Received {:.6} SOL for ${:.2} USDC", sol_change, usdc_change.abs());
-                info!("💰 USDC PnL Tracking: Spent ${:.2} USDC for {:.6} SOL", usdc_change.abs(), sol_change);
-                return Ok((Some(sol_change), result.execution_price, Some(usdc_change)));
-            }
-            Ok((None, result.execution_price, None))
+            
+            // Return ACTUAL balance changes, not transaction parsing
+            Ok((Some(actual_sol_change), result.execution_price, Some(actual_usdc_change)))
         } else {
             let error_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
             error!("❌ BUY trade failed: {}", error_msg);
@@ -277,30 +292,35 @@ impl TradingExecutor {
     async fn execute_sell_signal(&self, _signal: &TradingSignal, balance: &WalletBalance, sell_quantity: Option<f64>) -> Result<(bool, Option<f64>, Option<f64>)> {
         info!("🔴 Executing SELL signal...");
         
+        // Get precise balance before trade for accurate P&L tracking
+        let balance_before = self.get_wallet_balance().await?;
+        info!("💰 Balance before SELL: ${:.2} USDC, {:.6} SOL", 
+              balance_before.usdc_balance, balance_before.sol_balance);
+        
         // For sell signals, we need to check SOL balance
-        if balance.sol_balance < 0.001 {
-            warn!("⚠️  Insufficient SOL balance for trade: {:.6} SOL", balance.sol_balance);
+        if balance_before.sol_balance < 0.001 {
+            warn!("⚠️  Insufficient SOL balance for trade: {:.6} SOL", balance_before.sol_balance);
             return Ok((false, None, None));
         }
 
         // Use the exact quantity that was bought, not a percentage of current balance
         let position_size_sol = if let Some(quantity) = sell_quantity {
             // Use the exact quantity that was bought
-            if quantity > balance.sol_balance {
+            if quantity > balance_before.sol_balance {
                 warn!("⚠️  Requested sell quantity ({:.6} SOL) exceeds available balance ({:.6} SOL)", 
-                      quantity, balance.sol_balance);
+                      quantity, balance_before.sol_balance);
                 warn!("🔄 Falling back to selling available balance");
-                balance.sol_balance
+                balance_before.sol_balance
             } else {
                 quantity
             }
         } else {
             // Fallback to percentage-based calculation if no quantity provided
             warn!("⚠️  No sell quantity provided, using percentage-based calculation");
-            balance.sol_balance * self.position_size_percentage
+            balance_before.sol_balance * self.position_size_percentage
         };
         
-        info!("💰 Using {:.6} SOL for trade ({:.6} available)", position_size_sol, balance.sol_balance);
+        info!("💰 Using {:.6} SOL for trade ({:.6} available)", position_size_sol, balance_before.sol_balance);
 
         let result = self.execute_transaction_command(
             position_size_sol,
@@ -309,16 +329,26 @@ impl TradingExecutor {
         ).await?;
 
         if result.success {
+            // Get precise balance after trade for accurate P&L tracking
+            let balance_after = self.get_wallet_balance().await?;
+            info!("💰 Balance after SELL: ${:.2} USDC, {:.6} SOL", 
+                  balance_after.usdc_balance, balance_after.sol_balance);
+            
+            // Calculate ACTUAL wallet balance changes (this is the real P&L)
+            let actual_usdc_change = balance_after.usdc_balance - balance_before.usdc_balance;
+            let actual_sol_change = balance_after.sol_balance - balance_before.sol_balance;
+            
             info!("✅ SELL trade executed successfully!");
+            info!("📊 ACTUAL wallet balance changes: USDC: ${:.2}, SOL: {:.6}", 
+                  actual_usdc_change, actual_sol_change);
+            info!("💰 Real USDC P&L: Received ${:.2} USDC (including all fees)", actual_usdc_change);
+            
             if let Some(signature) = &result.signature {
                 info!("📊 Transaction signature: {}", signature);
             }
-            if let (Some(sol_change), Some(usdc_change)) = (result.sol_change, result.usdc_change) {
-                info!("💱 Traded {:.6} SOL for ${:.2} USDC", sol_change.abs(), usdc_change);
-                info!("💰 USDC PnL Tracking: Received ${:.2} USDC for {:.6} SOL", usdc_change, sol_change.abs());
-                return Ok((true, result.execution_price, Some(usdc_change)));
-            }
-            Ok((true, result.execution_price, None))
+            
+            // Return ACTUAL balance changes, not transaction parsing
+            Ok((true, result.execution_price, Some(actual_usdc_change)))
         } else {
             let error_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
             error!("❌ SELL trade failed: {}", error_msg);
