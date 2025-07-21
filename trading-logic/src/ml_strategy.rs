@@ -75,9 +75,9 @@ impl MLStrategy {
             .unwrap_or(true);
 
         let min_confidence_threshold = std::env::var("MIN_CONFIDENCE_THRESHOLD")
-            .unwrap_or_else(|_| "0.55".to_string())
+            .unwrap_or_else(|_| "0.30".to_string())  // More permissive threshold - allows more opportunities
             .parse::<f64>()
-            .unwrap_or(0.55);
+            .unwrap_or(0.30);
 
         let max_position_size = std::env::var("ML_MAX_POSITION_SIZE")
             .unwrap_or_else(|_| "0.9".to_string())
@@ -124,14 +124,7 @@ impl MLStrategy {
             return Ok(signal.clone());
         }
 
-        // Auto-save ML trade data every 5 trades to prevent data loss
-        if self.recent_trades.len() % 5 == 0 && !self.recent_trades.is_empty() {
-            if let Err(e) = self.save_recent_trades_to_database().await {
-                warn!("⚠️ Failed to auto-save ML trade data: {}", e);
-            } else {
-                debug!("💾 ML trade data auto-saved ({} trades)", self.recent_trades.len());
-            }
-        }
+        // Removed auto-save to prevent duplicate data - trades are saved once when recorded
 
         let features = self.extract_features(prices, indicators)?;
         
@@ -149,15 +142,27 @@ impl MLStrategy {
             // Add basic ML reasoning
             enhanced_signal.reasoning.push("ML: No trade history - minimal adjustments applied".to_string());
             
-            // Apply neural enhancement if available
+            // Apply neural enhancement only for actionable signals (Buy/Sell, not Hold)
             if let Some(ref mut neural_system) = self.neural_system {
-                match neural_system.enhance_signal(&enhanced_signal, prices, indicators).await {
-                    Ok(neural_enhanced_signal) => {
-                        enhanced_signal = neural_enhanced_signal;
-                        info!("🧠 Neural enhancement applied successfully (no ML history)");
+                match enhanced_signal.signal_type {
+                    crate::models::SignalType::Buy | crate::models::SignalType::Sell => {
+                        match neural_system.enhance_signal(&enhanced_signal, prices, indicators).await {
+                            Ok(neural_enhanced_signal) => {
+                                enhanced_signal = neural_enhanced_signal;
+                                info!("🧠 Neural enhancement applied to {} signal (no ML history)", 
+                                      match enhanced_signal.signal_type {
+                                          crate::models::SignalType::Buy => "BUY",
+                                          crate::models::SignalType::Sell => "SELL", 
+                                          _ => "UNKNOWN"
+                                      });
+                            }
+                            Err(e) => {
+                                warn!("Neural signal enhancement failed: {}", e);
+                            }
+                        }
                     }
-                    Err(e) => {
-                        warn!("Neural signal enhancement failed: {}", e);
+                    crate::models::SignalType::Hold => {
+                        debug!("🧠 Neural enhancement skipped for HOLD signal (no ML history)");
                     }
                 }
             }
@@ -179,41 +184,57 @@ impl MLStrategy {
         // Start with the base signal
         let mut enhanced_signal = signal.clone();
         
-        // Simple confidence adjustments based on ML prediction (more conservative)
+        info!("🤖 ML Enhancement: Base signal {:?} with {:.1}% confidence", 
+              signal.signal_type, signal.confidence * 100.0);
+        
+        // Simple confidence adjustments based on ML prediction (minimal penalties)
         if prediction.win_rate > 0.7 {
-            enhanced_signal.confidence += 0.05; // Smaller boost if winning consistently
+            enhanced_signal.confidence += 0.02; // Minimal boost if winning consistently
+            info!("🤖 ML Boost: Win rate {:.1}% > 70%, confidence +2%", prediction.win_rate * 100.0);
         } else if prediction.win_rate > 0.6 {
-            enhanced_signal.confidence += 0.03; // Even smaller boost if winning
+            enhanced_signal.confidence += 0.01; // Very small boost if winning
+            info!("🤖 ML Boost: Win rate {:.1}% > 60%, confidence +1%", prediction.win_rate * 100.0);
         } else if prediction.win_rate < 0.3 {
-            enhanced_signal.confidence -= 0.05; // Smaller reduction if losing consistently
+            enhanced_signal.confidence -= 0.02; // Minimal reduction if losing consistently
+            info!("🤖 ML Penalty: Win rate {:.1}% < 30%, confidence -2%", prediction.win_rate * 100.0);
         } else if prediction.win_rate < 0.4 {
-            enhanced_signal.confidence -= 0.03; // Even smaller reduction if losing
+            enhanced_signal.confidence -= 0.01; // Very small reduction if losing
+            info!("🤖 ML Penalty: Win rate {:.1}% < 40%, confidence -1%", prediction.win_rate * 100.0);
+        } else {
+            info!("🤖 ML Neutral: Win rate {:.1}% (40-60%), no adjustment", prediction.win_rate * 100.0);
         }
         
-        // Additional adjustments for consecutive losses (less aggressive)
-        if prediction.consecutive_losses > 5.0 {
-            enhanced_signal.confidence -= 0.05; // Small reduction only after many losses
-        } else if prediction.consecutive_losses > 3.0 {
-            enhanced_signal.confidence -= 0.03; // Very small reduction after losses
+        // Additional adjustments for consecutive losses (minimal penalties)
+        if prediction.consecutive_losses > 8.0 {
+            enhanced_signal.confidence -= 0.02; // Very small reduction only after many losses
+        } else if prediction.consecutive_losses > 6.0 {
+            enhanced_signal.confidence -= 0.01; // Minimal reduction after losses
         }
-        // Note: Removed penalty for 2-3 losses to prevent getting stuck
+        // Note: Removed penalty for 2-6 losses to prevent getting stuck
         
-        // Volatility adjustment (crypto-appropriate thresholds)
-        if features.volatility > 0.25 {
-            enhanced_signal.confidence -= 0.08; // Moderate reduction in very high volatility (25%+)
-        } else if features.volatility > 0.15 {
-            enhanced_signal.confidence -= 0.05; // Smaller reduction in high volatility (15%+)
+        // Volatility adjustment (minimal penalties)
+        if features.volatility > 0.35 {
+            enhanced_signal.confidence -= 0.02; // Minimal reduction in very high volatility (35%+)
+        } else if features.volatility > 0.25 {
+            enhanced_signal.confidence -= 0.01; // Very small reduction in high volatility (25%+)
         }
         // Note: 7% volatility (your current level) now gets no penalty
         
         // Cap confidence at reasonable bounds
         enhanced_signal.confidence = enhanced_signal.confidence.max(0.2).min(0.9);
         
+        info!("🤖 ML Final: Enhanced signal {:?} with {:.1}% confidence (threshold: {:.1}%)", 
+              enhanced_signal.signal_type, enhanced_signal.confidence * 100.0, self.min_confidence_threshold * 100.0);
+        
         // Convert to HOLD if confidence too low
         if enhanced_signal.confidence < self.min_confidence_threshold {
             enhanced_signal.signal_type = SignalType::Hold;
             enhanced_signal.reasoning.push(format!("ML confidence too low ({:.0}% < {:.0}%) - converted to HOLD", 
                   enhanced_signal.confidence * 100.0, self.min_confidence_threshold * 100.0));
+            info!("🚫 ML Rejected: Confidence {:.1}% < Threshold {:.1}%", 
+                  enhanced_signal.confidence * 100.0, self.min_confidence_threshold * 100.0);
+        } else {
+            info!("✅ ML Accepted: {:?} with {:.1}% confidence", enhanced_signal.signal_type, enhanced_signal.confidence * 100.0);
         }
         
         // Add ML reasoning
@@ -222,15 +243,27 @@ impl MLStrategy {
         enhanced_signal.reasoning.push(format!("ML Market Regime: {:?}", prediction.market_regime));
         enhanced_signal.reasoning.push(format!("ML Risk Score: {:.0}%", prediction.risk_score * 100.0));
         
-        // 🧠 Neural Network Enhancement
+        // 🧠 Neural Network Enhancement - only for actionable signals (Buy/Sell, not Hold)
         if let Some(ref mut neural_system) = self.neural_system {
-            match neural_system.enhance_signal(&enhanced_signal, prices, indicators).await {
-                Ok(neural_enhanced_signal) => {
-                    enhanced_signal = neural_enhanced_signal;
-                    info!("🧠 Neural enhancement applied successfully");
+            match enhanced_signal.signal_type {
+                crate::models::SignalType::Buy | crate::models::SignalType::Sell => {
+                    match neural_system.enhance_signal(&enhanced_signal, prices, indicators).await {
+                        Ok(neural_enhanced_signal) => {
+                            enhanced_signal = neural_enhanced_signal;
+                            info!("🧠 Neural enhancement applied to {} signal", 
+                                  match enhanced_signal.signal_type {
+                                      crate::models::SignalType::Buy => "BUY",
+                                      crate::models::SignalType::Sell => "SELL", 
+                                      _ => "UNKNOWN"
+                                  });
+                        }
+                        Err(e) => {
+                            warn!("Neural signal enhancement failed: {}", e);
+                        }
+                    }
                 }
-                Err(e) => {
-                    warn!("Neural signal enhancement failed: {}", e);
+                crate::models::SignalType::Hold => {
+                    debug!("🧠 Neural enhancement skipped for HOLD signal");
                 }
             }
         }
@@ -260,30 +293,30 @@ impl MLStrategy {
         // More stable confidence calculation
         let mut confidence_score: f64 = 0.5; // Base confidence
         
-        // Adjust confidence based on performance (more conservative)
+        // Adjust confidence based on performance (minimal penalties)
         if win_rate > 0.7 {
-            confidence_score += 0.15; // High confidence if winning consistently
+            confidence_score += 0.05; // Small confidence if winning consistently
         } else if win_rate > 0.6 {
-            confidence_score += 0.1; // Moderate confidence if winning
+            confidence_score += 0.02; // Very small confidence if winning
         } else if win_rate < 0.3 {
-            confidence_score -= 0.15; // Low confidence if losing consistently
+            confidence_score -= 0.05; // Small reduction if losing consistently
         } else if win_rate < 0.4 {
-            confidence_score -= 0.1; // Moderate reduction if losing
+            confidence_score -= 0.02; // Very small reduction if losing
         }
         
-        // Adjust for consecutive losses (less aggressive)
-        if consecutive_losses > 5.0 {
-            confidence_score -= 0.1; // Small reduction only after many losses
-        } else if consecutive_losses > 3.0 {
-            confidence_score -= 0.05; // Very small reduction after losses
+        // Adjust for consecutive losses (minimal penalties)
+        if consecutive_losses > 8.0 {
+            confidence_score -= 0.02; // Very small reduction only after many losses
+        } else if consecutive_losses > 6.0 {
+            confidence_score -= 0.01; // Minimal reduction after losses
         }
-        // Note: Removed penalty for 2-3 losses to prevent getting stuck
+        // Note: Removed penalty for 2-6 losses to prevent getting stuck
         
-        // Adjust for volatility (crypto-appropriate thresholds)
-        if volatility > 0.25 {
-            confidence_score -= 0.15; // Bigger reduction in very high volatility (25%+)
-        } else if volatility > 0.15 {
-            confidence_score -= 0.1; // Moderate reduction in high volatility (15%+)
+        // Adjust for volatility (minimal penalties)
+        if volatility > 0.35 {
+            confidence_score -= 0.03; // Small reduction in very high volatility (35%+)
+        } else if volatility > 0.25 {
+            confidence_score -= 0.02; // Minimal reduction in high volatility (25%+)
         }
         // Note: 7% volatility (your current level) now gets no penalty
         
@@ -502,7 +535,7 @@ impl MLStrategy {
         if let Err(e) = self.save_trade_to_database(&trade_result, &self.config.trading_pair, market_regime, trend_strength, volatility).await {
             warn!("⚠️ Failed to save ML trade to database: {}", e);
         } else {
-            info!("💾 ML trade saved to database for persistence");
+            debug!("💾 ML trade saved to database for persistence");
         }
         
         info!("🤖 ML+Neural Trade Recorded - PnL: {:.2}%, Success: {}, Neural: {}", 
@@ -520,12 +553,9 @@ impl MLStrategy {
             self.recent_trades.pop_front();
         }
         
-        // Save to database
-        if let Err(e) = self.save_trade_to_database(&trade_result, pair, market_regime, trend_strength, volatility).await {
-            warn!("⚠️ Failed to save trade to database: {}", e);
-        }
+        // Removed duplicate database save - trades are saved once in record_trade()
         
-        info!("🤖 ML Trade Recorded & Saved - PnL: {:.2}%, Success: {}", trade_result.pnl * 100.0, trade_result.success);
+        info!("🤖 ML Trade Recorded - PnL: {:.2}%, Success: {}", trade_result.pnl * 100.0, trade_result.success);
     }
 
     pub fn get_ml_stats(&self) -> MLStats {
@@ -590,6 +620,8 @@ impl MLStrategy {
         Ok(())
     }
 
+
+
     pub async fn save_trade_to_database(&self, trade: &TradeResult, pair: &str, market_regime: &str, trend_strength: f64, volatility: f64) -> Result<()> {
         let url = format!("{}/ml/trades", self.database_url);
         
@@ -612,7 +644,7 @@ impl MLStrategy {
         match self.db_client.post(&url).json(&payload).send().await {
             Ok(response) => {
                 if response.status().is_success() {
-                    info!("🤖 Saved trade to database: PnL {:.2}%, Success: {}", trade.pnl * 100.0, trade.success);
+                    debug!("🤖 Saved trade to database: PnL {:.2}%, Success: {}", trade.pnl * 100.0, trade.success);
                 } else {
                     warn!("⚠️ Failed to save trade to database: HTTP {}", response.status());
                 }

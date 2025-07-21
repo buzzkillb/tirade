@@ -24,7 +24,7 @@ impl Default for NeuralConfig {
             enabled: true,
             learning_rate: 0.01,
             memory_size: 100,
-            confidence_threshold: 0.6,
+            confidence_threshold: 0.15,
             lstm_sequence_length: 20,
             momentum: 0.9,
             pattern_memory_size: 1000,
@@ -738,10 +738,13 @@ impl NeuralEnhancement {
             }
         }
         
+        info!("🧠 Neural Analysis: Prediction confidence {:.1}%, threshold {:.1}%", 
+              neural_pred.confidence * 100.0, self.config.confidence_threshold * 100.0);
+        
         // Only enhance if neural network is confident
         if neural_pred.confidence < self.config.confidence_threshold {
-            debug!("🧠 Neural confidence too low ({:.1}%), using original signal", 
-                   neural_pred.confidence * 100.0);
+            info!("🚫 Neural Rejected: Confidence {:.1}% < Threshold {:.1}%", 
+                  neural_pred.confidence * 100.0, self.config.confidence_threshold * 100.0);
             return Ok(signal.clone());
         }
         
@@ -793,6 +796,8 @@ impl NeuralEnhancement {
         
         info!("🧠 Neural enhancement applied: Original {:.1}% → Enhanced {:.1}%", 
               signal.confidence * 100.0, enhanced_signal.confidence * 100.0);
+        
+        info!("✅ Neural Final: {:?} with {:.1}% confidence", enhanced_signal.signal_type, enhanced_signal.confidence * 100.0);
         
         Ok(enhanced_signal)
     }

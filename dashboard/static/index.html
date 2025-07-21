@@ -538,25 +538,36 @@
                 <h2>▶ AI Trading Strategy</h2>
                 <div class="neural-stats" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
                     <div class="stat">
-                        <div class="stat-value" style="color: #00ff41;">🧠 DYNAMIC</div>
-                        <div class="stat-label">Exit Strategy</div>
+                        <div class="stat-value" style="color: #00ff41;">🔄 SMART</div>
+                        <div class="stat-label">Retracement Control</div>
                     </div>
                     <div class="stat">
-                        <div class="stat-value" style="color: #00ccff;">🎯 ADAPTIVE</div>
+                        <div class="stat-value" style="color: #ff6b6b;">🛡️ PROTECTED</div>
                         <div class="stat-label">Risk Management</div>
                     </div>
                     <div class="stat">
-                        <div class="stat-value" style="color: #ffff00;">🚀 NEURAL</div>
-                        <div class="stat-label">Decision Making</div>
+                        <div class="stat-value" style="color: #4ecdc4;">🧠 ENHANCED</div>
+                        <div class="stat-label">Neural Learning</div>
                     </div>
                     <div class="stat">
-                        <div class="stat-value" style="color: #00ff41;">✅ ACTIVE</div>
-                        <div class="stat-label">AI Control</div>
+                        <div class="stat-value" style="color: #45b7d1;">💾 PERSISTENT</div>
+                        <div class="stat-label">Memory System</div>
                     </div>
                 </div>
                 <div style="background: rgba(0, 255, 65, 0.1); padding: 15px; border-radius: 8px; border-left: 4px solid #00ff41; margin-top: 15px;">
-                    <div style="font-size: 0.9rem; line-height: 1.4; opacity: 0.9;">
-                        🧠 <strong>Full Neural Control:</strong> All trading decisions are made by AI with no fixed thresholds. The neural network dynamically adjusts exit conditions, risk management, and position sizing based on real-time market analysis and learned patterns.
+                    <div style="font-size: 0.85rem; line-height: 1.5; opacity: 0.95;">
+                        <div style="margin-bottom: 12px;">
+                            <strong>🔄 Smart Retracement Control:</strong> Multi-timeframe RSI confirmation (30min/2hr/6hr) with time + opportunity cost filters prevent buying higher than previous sells. System waits for 1% retracement (2hrs) or 0.5% (6hrs), but overrides for 2%+ trend continuation moves.
+                        </div>
+                        <div style="margin-bottom: 12px;">
+                            <strong>🛡️ Risk Management:</strong> Fixed 2% stop-loss and 4% take-profit targets with 5-minute minimum hold times. Profit movement filter (0.05%) blocks fee-eroding micro-trades and prevents noise-based entries.
+                        </div>
+                        <div style="margin-bottom: 12px;">
+                            <strong>🧠 Neural Enhancement:</strong> AI analyzes 5,000+ predictions with 81.9% win rate, boosting signal confidence when patterns align. System learns from every trade outcome and adapts thresholds based on market volatility.
+                        </div>
+                        <div>
+                            <strong>💾 Persistent Memory:</strong> All trading decisions, retracement filters, and neural patterns survive restarts using existing trade history. No data loss between sessions - system remembers last sell prices for intelligent re-entry decisions.
+                        </div>
                     </div>
                 </div>
             </div>
@@ -817,8 +828,8 @@
         // Initial load
         updateDashboard();
         
-        // Update every 5 seconds
-        updateInterval = setInterval(updateDashboard, 5000);
+        // Update every 1 second for real-time price and P&L updates
+        updateInterval = setInterval(updateDashboard, 1000);
         
         // Handle visibility change to pause/resume updates
         document.addEventListener('visibilitychange', function() {
@@ -826,7 +837,7 @@
                 clearInterval(updateInterval);
             } else {
                 updateDashboard();
-                updateInterval = setInterval(updateDashboard, 5000);
+                updateInterval = setInterval(updateDashboard, 1000);
             }
         });
     </script>

@@ -335,4 +335,79 @@ impl DatabaseService {
         let insights_data: serde_json::Value = response.json().await?;
         Ok(insights_data)
     }
+
+    // Get the most recent closed position for retracement filter using existing ML trades endpoint
+    pub async fn get_last_closed_position(&self, wallet_address: &str) -> Result<Option<PositionDb>> {
+        // Use the existing ML trades endpoint to get recent trades
+        let url = format!("{}/ml/trades/SOL%2FUSDC?limit=10", self.base_url);
+        
+        let response = self.client.get(&url)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await?;
+            
+        if !response.status().is_success() {
+            if response.status() == 404 {
+                return Ok(None); // No trades found
+            }
+            return Err(anyhow!("Failed to fetch recent trades: {}", response.status()));
+        }
+
+        // First parse as generic JSON to handle different response formats
+        let response_json: serde_json::Value = response.json().await?;
+        
+        // Handle both array and object responses
+        let trades = match response_json {
+            serde_json::Value::Array(trades_array) => trades_array,
+            serde_json::Value::Object(obj) => {
+                // If it's an object, look for a data field or trades field
+                if let Some(serde_json::Value::Array(trades_array)) = obj.get("data") {
+                    trades_array.clone()
+                } else if let Some(serde_json::Value::Array(trades_array)) = obj.get("trades") {
+                    trades_array.clone()
+                } else {
+                    // If no array found, return empty
+                    return Ok(None);
+                }
+            },
+            _ => return Ok(None), // Unexpected format
+        };
+        
+        // Find the most recent sell trade
+        for trade in trades {
+            if let (Some(trade_type), Some(exit_price), Some(exit_time_str)) = (
+                trade.get("trade_type").and_then(|v| v.as_str()),
+                trade.get("exit_price").and_then(|v| v.as_f64()),
+                trade.get("exit_time").and_then(|v| v.as_str())
+            ) {
+                if trade_type == "SELL" {
+                    // Parse the exit time
+                    if let Ok(exit_time) = chrono::DateTime::parse_from_rfc3339(exit_time_str) {
+                        // Create a mock PositionDb with the sell information
+                        let position = PositionDb {
+                            id: "mock".to_string(),
+                            wallet_id: wallet_address.to_string(),
+                            pair: "SOL/USDC".to_string(),
+                            position_type: "LONG".to_string(),
+                            entry_price: 0.0, // Not needed for retracement filter
+                            entry_time: exit_time.with_timezone(&chrono::Utc),
+                            quantity: 0.0, // Not needed for retracement filter
+                            status: "CLOSED".to_string(),
+                            exit_price,
+                            exit_time: Some(exit_time.with_timezone(&chrono::Utc)),
+                            pnl: 0.0,
+                            pnl_percent: 0.0,
+                            duration_seconds: 0,
+                            created_at: exit_time.with_timezone(&chrono::Utc),
+                            updated_at: exit_time.with_timezone(&chrono::Utc),
+                            current_price: exit_price,
+                        };
+                        return Ok(Some(position));
+                    }
+                }
+            }
+        }
+        
+        Ok(None) // No sell trades found
+    }
 }

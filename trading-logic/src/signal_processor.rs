@@ -55,6 +55,9 @@ pub struct SignalProcessor {
     trading_pair: String,
     last_buy_wallet_index: Option<usize>, // Track rotation for buy signals
     dynamic_config: DynamicConfidenceConfig, // Dynamic confidence configuration
+    last_trade_time: Option<chrono::DateTime<Utc>>, // Track last trade time for cooldown
+    last_sell_price: Option<f64>, // Track last sell price for retracement filter
+    last_sell_time: Option<chrono::DateTime<Utc>>, // Track last sell time for retracement filter
 }
 
 impl SignalProcessor {
@@ -63,13 +66,102 @@ impl SignalProcessor {
             trading_pair,
             last_buy_wallet_index: None,
             dynamic_config: DynamicConfidenceConfig::default(),
+            last_trade_time: None,
+            last_sell_price: None,
+            last_sell_time: None,
         }
+    }
+
+    /// Restore last sell information from ML trade history on startup
+    pub async fn restore_last_sell_from_database(&mut self, database: &crate::database_service::DatabaseService, _wallet_address: &str) -> Result<()> {
+        // Use ML trade history to get the most recent sell (exit) price
+        let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+        let client = reqwest::Client::new();
+        
+        // Query ML trades for the most recent trade (limit=1)
+        let url = format!("{}/ml/trades/SOL%2FUSDC?limit=1", database_url);
+        
+        match client.get(&url).send().await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    match response.json::<serde_json::Value>().await {
+                        Ok(response_json) => {
+                            // Handle both array and object responses
+                            let trades = match response_json {
+                                serde_json::Value::Array(trades_array) => trades_array,
+                                serde_json::Value::Object(obj) => {
+                                    if let Some(serde_json::Value::Array(trades_array)) = obj.get("data") {
+                                        trades_array.clone()
+                                    } else {
+                                        Vec::new()
+                                    }
+                                },
+                                _ => Vec::new(),
+                            };
+                            
+                            if let Some(last_trade) = trades.first() {
+                                if let (Some(exit_price), Some(exit_time_str)) = (
+                                    last_trade.get("exit_price").and_then(|v| v.as_f64()),
+                                    last_trade.get("exit_time").and_then(|v| v.as_str())
+                                ) {
+                                    // Parse the exit time
+                                    if let Ok(exit_time) = chrono::DateTime::parse_from_rfc3339(exit_time_str) {
+                                        self.last_sell_price = Some(exit_price);
+                                        self.last_sell_time = Some(exit_time.with_timezone(&chrono::Utc));
+                                        info!("🔄 RETRACEMENT RESTORED: Last sell ${:.4} at {} from ML trade history", 
+                                              exit_price, exit_time.format("%H:%M:%S"));
+                                    } else {
+                                        warn!("⚠️ RETRACEMENT RESTORE: Could not parse exit time from ML trade");
+                                    }
+                                } else {
+                                    info!("🔄 RETRACEMENT RESTORED: ML trade found but missing exit price/time");
+                                }
+                            } else {
+                                info!("🔄 RETRACEMENT RESTORED: No ML trades found in database");
+                            }
+                        }
+                        Err(e) => {
+                            warn!("⚠️ RETRACEMENT RESTORE FAILED: Could not parse ML trade response: {}", e);
+                        }
+                    }
+                } else {
+                    warn!("⚠️ RETRACEMENT RESTORE FAILED: ML trade query failed: HTTP {}", response.status());
+                }
+            }
+            Err(e) => {
+                warn!("⚠️ RETRACEMENT RESTORE FAILED: Could not query ML trades: {}", e);
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Check if enough time has passed since last trade (cooldown mechanism)
+    fn check_trade_cooldown(&self) -> bool {
+        let cooldown_seconds = std::env::var("TRADE_COOLDOWN_SECONDS")
+            .unwrap_or_else(|_| "300".to_string())  // 5 minutes default
+            .parse::<i64>()
+            .unwrap_or(300);
+        
+        if let Some(last_trade) = self.last_trade_time {
+            let time_since_last_trade = (Utc::now() - last_trade).num_seconds();
+            if time_since_last_trade < cooldown_seconds {
+                info!("⏰ Trade cooldown active: {}s remaining ({}s required)", 
+                      cooldown_seconds - time_since_last_trade, cooldown_seconds);
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Update the last trade time
+    fn update_last_trade_time(&mut self) {
+        self.last_trade_time = Some(Utc::now());
     }
 
     /// Determine override level based on neural network confidence and performance
     fn determine_override_level(&self, _ml_strategy: &MLStrategy) -> OverrideLevel {
         // Overrides completely disabled - full neural network control
-        info!("🚀 Neural Network: FULL CONTROL - All overrides disabled");
         OverrideLevel::None
     }
 
@@ -77,7 +169,6 @@ impl SignalProcessor {
     fn get_override_thresholds(&self, override_level: &OverrideLevel) -> Option<(f64, f64)> {
         match override_level {
             OverrideLevel::None => {
-                info!("🚀 Neural Network: FULL CONTROL - No overrides applied");
                 None // No overrides - full neural control
             },
             OverrideLevel::Loose => {
@@ -102,6 +193,49 @@ impl SignalProcessor {
         position_manager: &mut PositionManager,
         database: &DatabaseService,
     ) -> Result<()> {
+        // Check trade cooldown to prevent rapid-fire trading
+        if !self.check_trade_cooldown() {
+            info!("🟢 BUY signal received but trade cooldown active - skipping to prevent micro-trading");
+            return Ok(());
+        }
+        
+        // TIME + OPPORTUNITY COST RETRACEMENT FILTER
+        if let (Some(last_sell_price), Some(last_sell_time)) = (self.last_sell_price, self.last_sell_time) {
+            let current_price = signal.price;
+            let time_since_sell = (Utc::now() - last_sell_time).num_minutes();
+            let price_move_since_sell = (current_price - last_sell_price) / last_sell_price;
+            
+            // Retracement requirements
+            let retracement_requirement = if time_since_sell <= 120 { // 2 hours
+                0.01 // Need 1% below last sell price
+            } else if time_since_sell <= 360 { // 6 hours
+                0.005 // Need 0.5% below last sell price
+            } else {
+                0.0 // No requirement after 6 hours
+            };
+            
+            let opportunity_cost_threshold = 0.02; // 2% move up = override
+            
+            // Check if we should block the buy
+            let price_too_high = current_price > (last_sell_price - (last_sell_price * retracement_requirement));
+            let opportunity_cost_triggered = price_move_since_sell > opportunity_cost_threshold;
+            let time_override = time_since_sell > 360; // 6 hours
+            
+            if price_too_high && !opportunity_cost_triggered && !time_override {
+                info!("🚫 BUY BLOCKED: ${:.4} too high vs sell ${:.4} ({}min ago, need ${:.4})", 
+                      current_price, last_sell_price, time_since_sell, last_sell_price - (last_sell_price * retracement_requirement));
+                return Ok(());
+            } else if opportunity_cost_triggered {
+                info!("✅ BUY ALLOWED: Opportunity cost override (+{:.2}% move)", price_move_since_sell * 100.0);
+            } else if time_override {
+                info!("✅ BUY ALLOWED: Time override ({}min)", time_since_sell);
+            } else {
+                info!("✅ BUY ALLOWED: Price retracement OK (${:.4} vs ${:.4})", current_price, last_sell_price);
+            }
+        } else {
+            info!("🔄 RETRACEMENT FILTER: No previous sell data - allowing buy");
+        }
+        
         info!("🟢 Processing BUY signal with staggered rotation across {} wallets", executors.len());
         
         // Single position per wallet: Each wallet can have max 1 position
@@ -161,6 +295,9 @@ impl SignalProcessor {
                                     
                                     // Update rotation tracker
                                     self.last_buy_wallet_index = Some(wallet_index);
+                                    
+                                    // Update trade cooldown timer
+                                    self.update_last_trade_time();
                                     
                                     info!("✅ {} opened position at ${:.4} (staggered entry)", 
                                           executor.get_wallet_name(), entry_price);
@@ -252,13 +389,19 @@ impl SignalProcessor {
     }
 
     pub async fn handle_sell_signal(
-        &self,
+        &mut self,
         signal: &TradingSignal,
         executors: &mut [TradingExecutor],
         position_manager: &mut PositionManager,
         database: &DatabaseService,
         ml_strategy: &mut MLStrategy,
     ) -> Result<()> {
+        // Check trade cooldown to prevent rapid-fire trading
+        if !self.check_trade_cooldown() {
+            info!("🔴 SELL signal received but trade cooldown active - skipping to prevent micro-trading");
+            return Ok(());
+        }
+        
         info!("🔴 Processing SELL signal with profit-based selection across {} wallets", executors.len());
         
         // STAGGERED STRATEGY: Find the best performing wallet to sell first
@@ -343,6 +486,9 @@ impl SignalProcessor {
                         // Clear position from memory
                         position_manager.clear_position(wallet_index);
                         
+                        // Update trade cooldown timer
+                        self.update_last_trade_time();
+                        
                         let pnl_emoji = if price_based_pnl > 0.0 { "💰" } else { "💸" };
                         info!("✅ {} closed BEST PERFORMING position: {} PnL: {:.2}% (staggered exit)", 
                               executor.get_wallet_name(), pnl_emoji, price_based_pnl * 100.0);
@@ -369,7 +515,7 @@ impl SignalProcessor {
     }
 
     pub async fn check_exit_conditions(
-        &self,
+        &mut self,
         prices: &[PriceFeed],
         indicators: &crate::models::TradingIndicators,
         executors: &mut [TradingExecutor],
@@ -411,31 +557,80 @@ impl SignalProcessor {
                 // 🧠 DYNAMIC CONFIDENCE SYSTEM: Apply exit conditions based on override level
                 let should_exit = match override_thresholds {
                     None => {
-                        // NO OVERRIDES: Full neural control - pure technical indicators
-                        let rsi_overbought_condition = rsi > 75.0;  // Pure RSI signal
-                        let momentum_decay_condition = momentum_decay;  // Pure momentum signal
+                        // NO OVERRIDES: Full neural control with stop-loss and take profit
+                        let position_age_minutes = (Utc::now() - position.entry_time).num_minutes();
                         
-                        info!("🧠 {} NEURAL CONTROL: RSI={:.1} > 75.0 = {}", 
-                              executor.get_wallet_name(), rsi, rsi_overbought_condition);
-                        info!("🧠 {} NEURAL CONTROL: Momentum Decay={} = {}", 
-                              executor.get_wallet_name(), momentum_decay, momentum_decay_condition);
+                        // Use environment variables for exit thresholds
+                        let min_exit_hold_time = std::env::var("MIN_EXIT_HOLD_TIME_MINUTES")
+                            .unwrap_or_else(|_| "5".to_string())
+                            .parse::<i64>()
+                            .unwrap_or(5);
                         
-                        rsi_overbought_condition || momentum_decay_condition
+                        let min_exit_profit = std::env::var("MIN_EXIT_PROFIT_PERCENT")
+                            .unwrap_or_else(|_| "2.0".to_string())
+                            .parse::<f64>()
+                            .unwrap_or(2.0) / 100.0; // Convert percentage to decimal
+                        
+                        let rsi_overbought_threshold = std::env::var("RSI_OVERBOUGHT_THRESHOLD")
+                            .unwrap_or_else(|_| "85.0".to_string())
+                            .parse::<f64>()
+                            .unwrap_or(85.0);
+                        
+                        // NEW: Stop-loss and take profit conditions
+                        let stop_loss_threshold = -0.02; // -2% stop loss
+                        let take_profit_threshold = 0.04; // +4% take profit
+                        
+                        // Exit conditions
+                        let stop_loss_condition = pnl < stop_loss_threshold;
+                        let take_profit_condition = pnl > take_profit_threshold && position_age_minutes >= min_exit_hold_time;
+                        let rsi_overbought_condition = rsi > rsi_overbought_threshold && pnl > min_exit_profit && position_age_minutes >= min_exit_hold_time;
+                        let momentum_decay_condition = momentum_decay && pnl > (min_exit_profit * 1.5) && position_age_minutes >= min_exit_hold_time;
+                        
+                        // Log only if conditions are close to triggering or actually triggered
+                        if stop_loss_condition {
+                            info!("🚨 {} STOP LOSS TRIGGERED: {:.2}% loss", executor.get_wallet_name(), pnl * 100.0);
+                        } else if take_profit_condition {
+                            info!("💰 {} TAKE PROFIT TRIGGERED: {:.2}% gain", executor.get_wallet_name(), pnl * 100.0);
+                        } else if rsi_overbought_condition {
+                            info!("📈 {} RSI EXIT TRIGGERED: RSI {:.1} overbought, {:.2}% gain", executor.get_wallet_name(), rsi, pnl * 100.0);
+                        } else if momentum_decay_condition {
+                            info!("📉 {} MOMENTUM EXIT TRIGGERED: Decay detected, {:.2}% gain", executor.get_wallet_name(), pnl * 100.0);
+                        }
+                        
+                        stop_loss_condition || take_profit_condition || rsi_overbought_condition || momentum_decay_condition
                     },
                     Some((stop_loss_threshold, take_profit_threshold)) => {
                         // OVERRIDES ACTIVE: Apply dynamic thresholds
-                        let rsi_overbought_condition = rsi > 70.0 && pnl > 0.014;  // Standard RSI condition
-                        let momentum_decay_condition = momentum_decay && pnl > 0.014;  // Standard momentum condition
-                        let take_profit_condition = pnl > take_profit_threshold;
+                        let position_age_minutes = (Utc::now() - position.entry_time).num_minutes();
+                        
+                        // Use environment variables for exit thresholds
+                        let min_exit_hold_time = std::env::var("MIN_EXIT_HOLD_TIME_MINUTES")
+                            .unwrap_or_else(|_| "3".to_string())
+                            .parse::<i64>()
+                            .unwrap_or(3);
+                        
+                        let min_exit_profit = std::env::var("MIN_EXIT_PROFIT_PERCENT")
+                            .unwrap_or_else(|_| "2.5".to_string())
+                            .parse::<f64>()
+                            .unwrap_or(2.5) / 100.0; // Convert percentage to decimal
+                        
+                        let rsi_overbought_threshold = std::env::var("RSI_OVERBOUGHT_THRESHOLD")
+                            .unwrap_or_else(|_| "80.0".to_string())
+                            .parse::<f64>()
+                            .unwrap_or(80.0);
+                        
+                        let rsi_overbought_condition = rsi > rsi_overbought_threshold && pnl > min_exit_profit && position_age_minutes >= min_exit_hold_time;
+                        let momentum_decay_condition = momentum_decay && pnl > min_exit_profit && position_age_minutes >= min_exit_hold_time;
+                        let take_profit_condition = pnl > take_profit_threshold && position_age_minutes >= min_exit_hold_time;
                         let stop_loss_condition = pnl < stop_loss_threshold;
                         
                         info!("🛡️ {} OVERRIDE ANALYSIS:", executor.get_wallet_name());
-                        info!("   RSI Overbought: RSI={:.1} > 70.0 && PnL={:.2}% > 1.4% = {}", 
-                              rsi, pnl * 100.0, rsi_overbought_condition);
-                        info!("   Momentum Decay: Decay={} && PnL={:.2}% > 1.4% = {}", 
-                              momentum_decay, pnl * 100.0, momentum_decay_condition);
-                        info!("   Take Profit: PnL={:.2}% > {:.1}% = {}", 
-                              pnl * 100.0, take_profit_threshold * 100.0, take_profit_condition);
+                        info!("   RSI Overbought: RSI={:.1} > {:.1} && PnL={:.2}% > {:.1}% && Age={}min >= {}min = {}", 
+                              rsi, rsi_overbought_threshold, pnl * 100.0, min_exit_profit * 100.0, position_age_minutes, min_exit_hold_time, rsi_overbought_condition);
+                        info!("   Momentum Decay: Decay={} && PnL={:.2}% > {:.1}% && Age={}min >= {}min = {}", 
+                              momentum_decay, pnl * 100.0, min_exit_profit * 100.0, position_age_minutes, min_exit_hold_time, momentum_decay_condition);
+                        info!("   Take Profit: PnL={:.2}% > {:.1}% && Age={}min >= {}min = {}", 
+                              pnl * 100.0, take_profit_threshold * 100.0, position_age_minutes, min_exit_hold_time, take_profit_condition);
                         info!("   Stop Loss: PnL={:.2}% < {:.1}% = {}", 
                               pnl * 100.0, stop_loss_threshold * 100.0, stop_loss_condition);
                         
@@ -447,24 +642,49 @@ impl SignalProcessor {
                     let exit_reason = match override_thresholds {
                         None => {
                             // Neural control - determine reason
-                            if rsi > 75.0 && pnl > 0.005 {
-                                "NEURAL: RSI OVERBOUGHT".to_string()
-                            } else if momentum_decay && pnl > 0.005 {
-                                "NEURAL: MOMENTUM DECAY".to_string()
+                            let min_exit_profit = std::env::var("MIN_EXIT_PROFIT_PERCENT")
+                                .unwrap_or_else(|_| "2.0".to_string())
+                                .parse::<f64>()
+                                .unwrap_or(2.0);
+                            
+                            let rsi_overbought_threshold = std::env::var("RSI_OVERBOUGHT_THRESHOLD")
+                                .unwrap_or_else(|_| "85.0".to_string())
+                                .parse::<f64>()
+                                .unwrap_or(85.0);
+                            
+                            // Check exit conditions in priority order
+                            if pnl < -0.02 {
+                                "STOP LOSS (-2.0%)".to_string()
+                            } else if pnl > 0.04 {
+                                "TAKE PROFIT (+4.0%)".to_string()
+                            } else if rsi > rsi_overbought_threshold && pnl > (min_exit_profit / 100.0) {
+                                format!("NEURAL: RSI OVERBOUGHT (+{:.1}%)", min_exit_profit)
+                            } else if momentum_decay && pnl > (min_exit_profit * 1.5 / 100.0) {
+                                format!("NEURAL: MOMENTUM DECAY (+{:.1}%)", min_exit_profit * 1.5)
                             } else {
                                 "NEURAL: TECHNICAL EXIT".to_string()
                             }
                         },
                         Some((stop_loss_threshold, take_profit_threshold)) => {
                             // Override control - determine reason
+                            let min_exit_profit = std::env::var("MIN_EXIT_PROFIT_PERCENT")
+                                .unwrap_or_else(|_| "2.5".to_string())
+                                .parse::<f64>()
+                                .unwrap_or(2.5);
+                            
+                            let rsi_overbought_threshold = std::env::var("RSI_OVERBOUGHT_THRESHOLD")
+                                .unwrap_or_else(|_| "80.0".to_string())
+                                .parse::<f64>()
+                                .unwrap_or(80.0);
+                            
                             if pnl < stop_loss_threshold {
                                 format!("STOP LOSS ({:.1}%)", stop_loss_threshold * 100.0)
                             } else if pnl > take_profit_threshold {
                                 format!("TAKE PROFIT (+{:.1}%)", take_profit_threshold * 100.0)
-                            } else if rsi > 70.0 && pnl > 0.014 {
-                                "RSI OVERBOUGHT (+1.4%)".to_string()
-                            } else if momentum_decay && pnl > 0.014 {
-                                "MOMENTUM DECAY (+1.4%)".to_string()
+                            } else if rsi > rsi_overbought_threshold && pnl > (min_exit_profit / 100.0) {
+                                format!("RSI OVERBOUGHT (+{:.1}%)", min_exit_profit)
+                            } else if momentum_decay && pnl > (min_exit_profit / 100.0) {
+                                format!("MOMENTUM DECAY (+{:.1}%)", min_exit_profit)
                             } else {
                                 "TECHNICAL EXIT".to_string()
                             }
@@ -524,6 +744,11 @@ impl SignalProcessor {
                             
                             // Clear position
                             position_manager.clear_position(wallet_index);
+                            
+                            // Track last sell for retracement filter
+                            self.last_sell_price = Some(exit_price);
+                            self.last_sell_time = Some(Utc::now());
+                            info!("🔄 RETRACEMENT TRACKER: Recorded sell at ${:.4} for future buy filtering", exit_price);
                             
                             let pnl_emoji = if actual_pnl > 0.0 { "💰" } else { "💸" };
                             info!("✅ {} exit completed: {} PnL: {:.2}% (actual execution price: ${:.4})", 

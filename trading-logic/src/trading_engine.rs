@@ -98,6 +98,16 @@ impl TradingEngine {
             info!("✅ ML trade history loaded successfully");
         }
         
+
+        
+        // Restore retracement filter from last closed position
+        if !self.trading_executors.is_empty() {
+            let wallet_address = self.trading_executors[0].get_wallet_address().unwrap_or_default();
+            if let Err(e) = self.signal_processor.restore_last_sell_from_database(&self.database_service, &wallet_address).await {
+                warn!("Failed to restore retracement filter: {}", e);
+            }
+        }
+        
         // Verify neural network state is loaded
         info!("🧠 Neural network state recovery completed during initialization");
         
@@ -485,7 +495,7 @@ impl TradingEngine {
         // Log ALL signals including HOLD to see confidence levels
         match signal.signal_type {
             SignalType::Hold => {
-                info!("📊 Analysis: HOLD at ${:.4} | Change: {:.2}% | Conf: {:.0}% | Reason: Signal below threshold", 
+                info!("📊 Analysis: HOLD at ${:.4} | Change: {:.2}% | Conf: {:.0}% | Reason: No trade conditions met", 
                       current_price, price_change * 100.0, signal.confidence * 100.0);
             }
             _ => {

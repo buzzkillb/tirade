@@ -206,19 +206,46 @@ impl TradingStrategy {
         let mut signal_type = SignalType::Hold;
 
         // === Option 2: Only RSI and Moving Average Trend ===
-        // 1. RSI Overbought/Oversold
+        // 1. RSI Overbought/Oversold with Multi-Timeframe Confirmation
         if let Some(rsi_fast) = short_term_indicators.rsi_fast {
+            info!("🔍 RSI Analysis: Current RSI {:.2}, Oversold threshold {:.1}, Overbought threshold {:.1}", 
+                  rsi_fast, dynamic_thresholds.rsi_oversold, dynamic_thresholds.rsi_overbought);
+            
+            // Get medium-term RSI for confirmation
+            let medium_rsi = _medium_term_indicators.rsi_fast.unwrap_or(50.0);
+            let long_rsi = _long_term_indicators.rsi_fast.unwrap_or(50.0);
+            
             if rsi_fast > dynamic_thresholds.rsi_overbought {
-                signal_type = SignalType::Sell;
-                confidence += 0.5;
-                reasoning.push(format!("RSI overbought: RSI ({:.2}) > {:.1}", rsi_fast, dynamic_thresholds.rsi_overbought));
+                // Multi-timeframe confirmation for SELL
+                let medium_confirms = medium_rsi > (dynamic_thresholds.rsi_overbought - 10.0); // Medium RSI > 60
+                let long_confirms = long_rsi > 50.0; // Long RSI above neutral
+                
+                if medium_confirms && long_confirms {
+                    signal_type = SignalType::Sell;
+                    confidence += 0.5;
+                    reasoning.push(format!("Multi-timeframe RSI overbought: Short ({:.1}) > {:.1}, Medium ({:.1}) confirms, Long ({:.1}) neutral+", 
+                                         rsi_fast, dynamic_thresholds.rsi_overbought, medium_rsi, long_rsi));
+                    info!("🎯 RSI SELL: Multi-timeframe confirmed ({:.1}/{:.1}/{:.1})", rsi_fast, medium_rsi, long_rsi);
+                } else {
+                    info!("🚫 RSI SELL: Multi-timeframe conflict ({:.1}/{:.1}/{:.1})", rsi_fast, medium_rsi, long_rsi);
+                }
             } else if rsi_fast < dynamic_thresholds.rsi_oversold {
-                signal_type = SignalType::Buy;
-                confidence += 0.5;
-                reasoning.push(format!("RSI oversold: RSI ({:.2}) < {:.1}", rsi_fast, dynamic_thresholds.rsi_oversold));
+                // Multi-timeframe confirmation for BUY
+                let medium_confirms = medium_rsi < (dynamic_thresholds.rsi_oversold + 10.0); // Medium RSI < 50
+                let long_confirms = long_rsi < 60.0; // Long RSI below overbought
+                
+                if medium_confirms && long_confirms {
+                    signal_type = SignalType::Buy;
+                    confidence += 0.5;
+                    reasoning.push(format!("Multi-timeframe RSI oversold: Short ({:.1}) < {:.1}, Medium ({:.1}) confirms, Long ({:.1}) not overbought", 
+                                         rsi_fast, dynamic_thresholds.rsi_oversold, medium_rsi, long_rsi));
+                    info!("🎯 RSI BUY: Multi-timeframe confirmed ({:.1}/{:.1}/{:.1})", rsi_fast, medium_rsi, long_rsi);
+                } else {
+                    info!("🚫 RSI BUY: Multi-timeframe conflict ({:.1}/{:.1}/{:.1})", rsi_fast, medium_rsi, long_rsi);
+                }
             }
         }
-
+        
         // 2. Moving Average Trend (only if not already set by RSI)
         if let (Some(sma_short), Some(rsi_fast)) = (short_term_indicators.sma_short, short_term_indicators.rsi_fast) {
             if signal_type == SignalType::Hold {
@@ -227,12 +254,14 @@ impl TradingStrategy {
                     signal_type = SignalType::Buy;
                     confidence += 0.3;
                     reasoning.push(format!("MA trend: Price (${:.4}) above SMA (${:.4}), RSI ({:.2}) neutral (40-60)", current_price, sma_short, rsi_fast));
+                    info!("🎯 MA BUY: Price above SMA, RSI neutral");
                 }
                 // Downtrend: Price below SMA and RSI neutral (40-60)
                 else if current_price < sma_short && rsi_fast >= 40.0 && rsi_fast <= 60.0 {
                     signal_type = SignalType::Sell;
                     confidence += 0.3;
                     reasoning.push(format!("MA trend: Price (${:.4}) below SMA (${:.4}), RSI ({:.2}) neutral (40-60)", current_price, sma_short, rsi_fast));
+                    info!("🎯 MA SELL: Price below SMA, RSI neutral");
                 }
             }
         }
@@ -550,12 +579,52 @@ impl TradingStrategy {
         // Cap confidence at 1.0
         confidence = confidence.min(1.0_f64);
 
+        // Check minimum volatility requirement to avoid micro-trading
+        let min_volatility_threshold = std::env::var("MIN_VOLATILITY_FOR_TRADING")
+            .unwrap_or_else(|_| "0.0001".to_string())  // 0.01% minimum volatility (lowered from 0.05%)
+            .parse::<f64>()
+            .unwrap_or(0.0001);
+        
+        if let Some(current_volatility) = short_term_indicators.volatility {
+            if current_volatility < min_volatility_threshold && signal_type != SignalType::Hold {
+                signal_type = SignalType::Hold;
+                reasoning.push(format!("Insufficient volatility for trading ({:.3}% < {:.3}%) - avoiding micro-trades", 
+                             current_volatility * 100.0, min_volatility_threshold * 100.0));
+                info!("🚫 Volatility too low: {:.3}% < {:.3}%", 
+                      current_volatility * 100.0, min_volatility_threshold * 100.0);
+            }
+        }
+
+        // Check minimum profit target to ensure trades cover fees
+        let min_profit_target = std::env::var("MIN_PROFIT_TARGET")
+            .unwrap_or_else(|_| "0.005".to_string())  // 0.5% minimum profit target
+            .parse::<f64>()
+            .unwrap_or(0.005);
+        
+        // Estimate potential profit based on recent price movement using momentum
+        if signal_type != SignalType::Hold {
+            if let Some(price_momentum) = short_term_indicators.price_momentum {
+                let recent_price_change = price_momentum.abs();
+                
+                if recent_price_change < min_profit_target {
+                    signal_type = SignalType::Hold;
+                    reasoning.push(format!("Insufficient price movement for profitable trade ({:.3}% < {:.3}%) - avoiding fee erosion", 
+                                 recent_price_change * 100.0, min_profit_target * 100.0));
+                    info!("🚫 Profit too low: {:.3}% < {:.3}%", 
+                          recent_price_change * 100.0, min_profit_target * 100.0);
+                }
+            }
+        }
+
         // Only generate signals if confidence is high enough (using configurable threshold)
         if confidence < self.config.min_confidence_threshold {
             signal_type = SignalType::Hold;
             reasoning.push(format!("Insufficient confidence for trade signal ({}% < {}%)", 
                                  (confidence * 100.0) as i32, 
                                  (self.config.min_confidence_threshold * 100.0) as i32));
+            info!("🚫 Signal: {:?} {:.1}% < {:.1}% threshold", signal_type, confidence * 100.0, self.config.min_confidence_threshold * 100.0);
+        } else {
+            info!("✅ Signal: {:?} {:.1}%", signal_type, confidence * 100.0);
         }
 
         TradingSignal {

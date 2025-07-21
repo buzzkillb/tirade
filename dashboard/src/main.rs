@@ -57,19 +57,13 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
     let client = reqwest::Client::new();
     let database_url = std::env::var("DATABASE_SERVICE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
     
-    // Fetch SOL price from Coinbase API
-    let sol_price = match client.get("https://api.coinbase.com/v2/exchange-rates?currency=SOL").send().await {
+    // Fetch SOL price from Pyth price feed via database
+    let sol_price = match client.get(&format!("{}/prices/SOL%2FUSDC/latest", database_url)).send().await {
         Ok(response) => {
-            if let Ok(coinbase_data) = response.json::<serde_json::Value>().await {
-                if let Some(data) = coinbase_data.get("data") {
-                    if let Some(rates) = data.get("rates") {
-                        if let Some(usd_rate) = rates.get("USD") {
-                            usd_rate.as_str()
-                                .and_then(|s| s.parse::<f64>().ok())
-                                .unwrap_or(0.0)
-                        } else {
-                            0.0
-                        }
+            if let Ok(api_response) = response.json::<serde_json::Value>().await {
+                if let Some(data) = api_response.get("data") {
+                    if let Some(price_data) = data.as_object() {
+                        price_data.get("price").and_then(|p| p.as_f64()).unwrap_or(0.0)
                     } else {
                         0.0
                     }
@@ -80,7 +74,33 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
                 0.0
             }
         }
-        Err(_) => 0.0,
+        Err(_) => {
+            // Fallback to Coinbase if Pyth price feed is unavailable
+            match client.get("https://api.coinbase.com/v2/exchange-rates?currency=SOL").send().await {
+                Ok(response) => {
+                    if let Ok(coinbase_data) = response.json::<serde_json::Value>().await {
+                        if let Some(data) = coinbase_data.get("data") {
+                            if let Some(rates) = data.get("rates") {
+                                if let Some(usd_rate) = rates.get("USD") {
+                                    usd_rate.as_str()
+                                        .and_then(|s| s.parse::<f64>().ok())
+                                        .unwrap_or(0.0)
+                                } else {
+                                    0.0
+                                }
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    }
+                }
+                Err(_) => 0.0,
+            }
+        }
     };
 
     // Fetch USDC-based PnL from performance metrics (already includes USDC-based calculation)
@@ -100,7 +120,7 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
         Err(_) => 0.0,
     };
 
-    // Fetch active positions
+    // Fetch active positions and calculate real-time P&L using current SOL price
     let active_trades = match client.get(&format!("{}/positions/active", database_url)).send().await {
         Ok(response) => {
             if let Ok(api_response) = response.json::<serde_json::Value>().await {
@@ -116,10 +136,13 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
                             
                             let entry_price = pos.get("entry_price").and_then(|p| p.as_f64()).unwrap_or(0.0);
                             let quantity = pos.get("quantity").and_then(|q| q.as_f64()).unwrap_or(0.0);
-                            let current_pnl = pos.get("pnl").and_then(|p| p.as_f64()).unwrap_or(0.0);
+                            
+                            // Calculate real-time P&L using current SOL price
+                            let current_value = sol_price * quantity;
+                            let initial_investment = entry_price * quantity;
+                            let current_pnl = current_value - initial_investment;
                             
                             // Calculate PnL percentage based on initial investment
-                            let initial_investment = entry_price * quantity;
                             let pnl_percentage = if initial_investment > 0.0 {
                                 (current_pnl / initial_investment) * 100.0
                             } else {
