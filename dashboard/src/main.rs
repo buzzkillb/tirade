@@ -51,6 +51,8 @@ struct RecentTrade {
     price: f64,
     amount: f64,
     timestamp: DateTime<Utc>,
+    usdc_pnl: Option<f64>,  // Real USDC PnL for completed trades
+    pnl_percentage: Option<f64>, // PnL percentage for completed trades
 }
 
 async fn get_dashboard_data() -> Result<HttpResponse> {
@@ -251,7 +253,7 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
         Err(_) => vec![],
     };
 
-    // Fetch recent trades - get closed positions and create BUY/SELL pairs
+    // Fetch recent trades - get closed positions and create BUY/SELL pairs with USDC PnL
     let recent_trades = match client.get(&format!("{}/positions/all?limit=10", database_url)).send().await {
         Ok(response) => {
             if let Ok(api_response) = response.json::<serde_json::Value>().await {
@@ -283,22 +285,38 @@ async fn get_dashboard_data() -> Result<HttpResponse> {
                                     .map(|dt| dt.with_timezone(&Utc))
                                     .unwrap_or_else(|| Utc::now());
 
-                                // Add SELL trade (more recent)
+                                // Extract USDC PnL data
+                                let usdc_spent = position.get("usdc_spent").and_then(|u| u.as_f64());
+                                let usdc_received = position.get("usdc_received").and_then(|u| u.as_f64());
+                                let pnl_percent = position.get("pnl_percent").and_then(|p| p.as_f64());
+                                
+                                // Calculate USDC PnL if both values are available
+                                let usdc_pnl = if let (Some(received), Some(spent)) = (usdc_received, usdc_spent) {
+                                    Some(received - spent.abs())
+                                } else {
+                                    None
+                                };
+
+                                // Add SELL trade (more recent) with PnL data
                                 trades.push(RecentTrade {
                                     trade_type: "SELL".to_string(),
                                     wallet: short_wallet.clone(),
                                     price: exit_price,
                                     amount: quantity,
                                     timestamp: exit_dt,
+                                    usdc_pnl,
+                                    pnl_percentage: pnl_percent,
                                 });
 
-                                // Add BUY trade (older)
+                                // Add BUY trade (older) without PnL data
                                 trades.push(RecentTrade {
                                     trade_type: "BUY".to_string(),
                                     wallet: short_wallet,
                                     price: entry_price,
                                     amount: quantity,
                                     timestamp: entry_dt,
+                                    usdc_pnl: None,
+                                    pnl_percentage: None,
                                 });
                             }
                         }

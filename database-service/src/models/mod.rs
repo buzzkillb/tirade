@@ -77,6 +77,11 @@ pub struct Position {
     // Dashboard compatibility fields
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_price: Option<f64>,
+    // USDC tracking fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usdc_spent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usdc_received: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

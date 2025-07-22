@@ -205,28 +205,33 @@ impl SignalProcessor {
             let time_since_sell = (Utc::now() - last_sell_time).num_minutes();
             let price_move_since_sell = (current_price - last_sell_price) / last_sell_price;
             
-            // Retracement requirements
-            let retracement_requirement = if time_since_sell <= 120 { // 2 hours
-                0.01 // Need 1% below last sell price
-            } else if time_since_sell <= 360 { // 6 hours
+            // Retracement requirements - RELAXED for faster re-entry
+            let retracement_requirement = if time_since_sell <= 60 { // 1 hour
                 0.005 // Need 0.5% below last sell price
+            } else if time_since_sell <= 180 { // 3 hours
+                0.002 // Need 0.2% below last sell price
             } else {
-                0.0 // No requirement after 6 hours
+                0.0 // No requirement after 3 hours
             };
             
-            let opportunity_cost_threshold = 0.02; // 2% move up = override
+            let opportunity_cost_threshold = 0.008; // 0.8% move up = override (much lower)
             
             // Check if we should block the buy
             let price_too_high = current_price > (last_sell_price - (last_sell_price * retracement_requirement));
             let opportunity_cost_triggered = price_move_since_sell > opportunity_cost_threshold;
-            let time_override = time_since_sell > 360; // 6 hours
+            let time_override = time_since_sell > 180; // 3 hours (reduced from 6)
             
-            if price_too_high && !opportunity_cost_triggered && !time_override {
+            // NEW: Strong uptrend override - if price is moving up strongly, allow re-entry
+            let strong_uptrend_override = price_move_since_sell > 0.005 && time_since_sell >= 30; // 0.5% up after 30min
+            
+            if price_too_high && !opportunity_cost_triggered && !time_override && !strong_uptrend_override {
                 info!("🚫 BUY BLOCKED: ${:.4} too high vs sell ${:.4} ({}min ago, need ${:.4})", 
                       current_price, last_sell_price, time_since_sell, last_sell_price - (last_sell_price * retracement_requirement));
                 return Ok(());
             } else if opportunity_cost_triggered {
                 info!("✅ BUY ALLOWED: Opportunity cost override (+{:.2}% move)", price_move_since_sell * 100.0);
+            } else if strong_uptrend_override {
+                info!("✅ BUY ALLOWED: Strong uptrend override (+{:.2}% move after {}min)", price_move_since_sell * 100.0, time_since_sell);
             } else if time_override {
                 info!("✅ BUY ALLOWED: Time override ({}min)", time_since_sell);
             } else {

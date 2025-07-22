@@ -132,6 +132,12 @@
             font-size: 0.9rem;
         }
         
+        .trade-pnl {
+            font-size: 0.8rem;
+            font-weight: bold;
+            margin-top: 2px;
+        }
+        
         .trade-item:last-child, .signal-item:last-child {
             border-bottom: none;
         }
@@ -578,7 +584,7 @@
         let updateInterval;
         
         function formatPrice(price) {
-            return `$${price.toFixed(4)}`;
+            return `${price.toFixed(4)}`;
         }
         
         function formatPnL(pnl) {
@@ -805,19 +811,33 @@
                 if (data.recent_trades.length === 0) {
                     tradesElement.innerHTML = '<div class="loading">No recent trades</div>';
                 } else {
-                    tradesElement.innerHTML = data.recent_trades.map(trade => `
+                    tradesElement.innerHTML = data.recent_trades.map(trade => {
+                        // Format USDC PnL display for SELL trades
+                        let pnlDisplay = '';
+                        if (trade.trade_type.toUpperCase() === 'SELL' && trade.usdc_pnl !== null && trade.usdc_pnl !== undefined) {
+                            const pnlClass = trade.usdc_pnl >= 0 ? 'buy' : 'sell';
+                            const pnlSign = trade.usdc_pnl >= 0 ? '+' : '';
+                            const percentDisplay = trade.pnl_percentage !== null ? ` (${trade.pnl_percentage >= 0 ? '+' : ''}${trade.pnl_percentage.toFixed(1)}%)` : '';
+                            pnlDisplay = `<span class="${pnlClass} trade-pnl">PnL: ${pnlSign}$${Math.abs(trade.usdc_pnl).toFixed(2)}${percentDisplay}</span>`;
+                        }
+                        
+                        return `
                         <div class="trade-item">
                             <div>
                                 <span class="${trade.trade_type.toLowerCase() === 'buy' ? 'buy' : 'sell'}">${trade.trade_type.toUpperCase()}</span>
                                 <span class="wallet">${trade.wallet}</span>
                             </div>
-                            <div>
-                                <span>${formatPrice(trade.price)}</span>
-                                <span>${trade.amount.toFixed(4)} SOL</span>
-                                <span class="timestamp">${formatTimestamp(trade.timestamp)}</span>
+                            <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 2px;">
+                                <div>
+                                    <span>$${formatPrice(trade.price)}</span>
+                                    <span>${trade.amount.toFixed(4)} SOL</span>
+                                    <span class="timestamp">${formatTimestamp(trade.timestamp)}</span>
+                                </div>
+                                ${pnlDisplay}
                             </div>
                         </div>
-                    `).join('');
+                        `;
+                    }).join('');
                 }
                 
             } catch (error) {

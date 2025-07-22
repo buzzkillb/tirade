@@ -900,6 +900,8 @@ impl Database {
             created_at: now,
             updated_at: now,
             current_price: Some(request.entry_price),
+            usdc_spent: request.usdc_spent,
+            usdc_received: None,
         })
     }
 
@@ -1007,6 +1009,8 @@ impl Database {
                 created_at: position.try_get("created_at")?,
                 updated_at: position.try_get("updated_at")?,
                 current_price: Some(position.try_get("exit_price").unwrap_or_else(|_| position.try_get("entry_price").unwrap_or(0.0))),
+                usdc_spent: position.try_get("usdc_spent").ok(),
+                usdc_received: position.try_get("usdc_received").ok(),
             });
         }
 
@@ -1127,6 +1131,8 @@ impl Database {
             created_at: updated_position.try_get("created_at")?,
             updated_at: updated_position.try_get("updated_at")?,
             current_price: Some(updated_position.try_get("exit_price").unwrap_or_else(|_| updated_position.try_get("entry_price").unwrap_or(0.0))),
+            usdc_spent: updated_position.try_get("usdc_spent").ok(),
+            usdc_received: updated_position.try_get("usdc_received").ok(),
         })
     }
 
@@ -1262,6 +1268,8 @@ impl Database {
                 created_at: row.try_get("created_at").unwrap_or_default(),
                 updated_at: row.try_get("updated_at").unwrap_or_default(),
                 current_price: Some(row.try_get("entry_price").unwrap_or_default()),
+                usdc_spent: row.try_get("usdc_spent").ok(),
+                usdc_received: row.try_get("usdc_received").ok(),
             })
             .collect();
 
@@ -1302,6 +1310,8 @@ impl Database {
                 created_at: row.try_get("created_at").unwrap_or_default(),
                 updated_at: row.try_get("updated_at").unwrap_or_default(),
                 current_price: Some(row.try_get("entry_price").unwrap_or_default()),
+                usdc_spent: row.try_get("usdc_spent").ok(),
+                usdc_received: row.try_get("usdc_received").ok(),
             })
             .collect();
 
@@ -1340,6 +1350,8 @@ impl Database {
                 created_at: row.try_get("created_at").unwrap_or_default(),
                 updated_at: row.try_get("updated_at").unwrap_or_default(),
                 current_price: Some(row.try_get("entry_price").unwrap_or_default()),
+                usdc_spent: row.try_get("usdc_spent").ok(),
+                usdc_received: row.try_get("usdc_received").ok(),
             })
             .collect();
 
@@ -1449,6 +1461,8 @@ impl Database {
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
                 current_price: Some(row.try_get("entry_price")?),
+                usdc_spent: row.try_get("usdc_spent").ok(),
+                usdc_received: row.try_get("usdc_received").ok(),
             })),
             None => Ok(None),
         }
@@ -1497,6 +1511,8 @@ impl Database {
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
             current_price: Some(row.try_get("entry_price")?),
+            usdc_spent: row.try_get("usdc_spent").ok(),
+            usdc_received: row.try_get("usdc_received").ok(),
         })
     }
 
@@ -1609,6 +1625,8 @@ impl Database {
                 created_at: row.try_get("created_at").unwrap_or_default(),
                 updated_at: row.try_get("updated_at").unwrap_or_default(),
                 current_price: Some(current_price), // Add current_price for dashboard compatibility
+                usdc_spent: row.try_get("usdc_spent").ok(),
+                usdc_received: row.try_get("usdc_received").ok(),
             });
         }
 
